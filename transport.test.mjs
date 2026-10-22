@@ -47,3 +47,30 @@ test('blocked owners keep pending messages without sending, then resume when rea
  assert.equal(store.db.prepare("SELECT status FROM messages WHERE id='blocked'").get().status,'queue');
  store.db.prepare('UPDATE users SET active=1 WHERE id=?').run('owner');transport.flush('abcd1234');await tick();assert.equal(calls,1);
 });
+
+test('incoming message triggers UltraMsg-shaped webhook, is stored once, and ACK updates are also delivered',async t=>{
+ const {store,transport,sockets}=await setup(t);
+ store.db.prepare('UPDATE instances SET webhook_url=? WHERE id=?').run('https://example.com/hook','abcd1234');
+ const calls=[];const realFetch=globalThis.fetch;
+ globalThis.fetch=async(url,opts)=>{calls.push({url,body:JSON.parse(opts.body)});return {ok:true};};
+ t.after(()=>{globalThis.fetch=realFetch;});
+ transport.connect('abcd1234');const s=sockets[0];s.ev.emit('connection.update',{connection:'open'});await tick();
+ s.ev.emit('messages.upsert',{type:'notify',messages:[{key:{id:'wamid1',remoteJid:'5511988887777@s.whatsapp.net',fromMe:false},message:{conversation:'Olá, tenho interesse'},messageTimestamp:1700000000,pushName:'Cliente Teste'}]});
+ await tick();
+ assert.equal(calls.length,1);
+ assert.equal(calls[0].url,'https://example.com/hook');
+ assert.equal(calls[0].body.event_type,'message_received');
+ assert.deepEqual(calls[0].body.data,{id:'wamid1',from:'5511988887777@s.whatsapp.net',to:'5511999999999',fromMe:false,body:'Olá, tenho interesse',type:'chat',time:1700000000,pushname:'Cliente Teste'});
+ const saved=store.db.prepare("SELECT direction,status,body FROM messages WHERE provider_id='wamid1'").get();
+ assert.deepEqual({...saved},{direction:'in',status:'received',body:'Olá, tenho interesse'});
+ // Replaying the same history event (type 'append', as on reconnect) must not re-deliver or duplicate it.
+ s.ev.emit('messages.upsert',{type:'append',messages:[{key:{id:'wamid1',remoteJid:'5511988887777@s.whatsapp.net',fromMe:false},message:{conversation:'Olá, tenho interesse'},messageTimestamp:1700000000,pushName:'Cliente Teste'}]});
+ await tick();assert.equal(calls.length,1);
+ assert.equal(store.db.prepare('SELECT count(*) AS n FROM messages').get().n,1);
+ // ACK on an API-sent message is also forwarded to the webhook, with the string label UltraMsg clients expect.
+ store.db.prepare('INSERT INTO messages(id,instance_id,recipient,body,type,status,ack,created_at,provider_id) VALUES(?,?,?,?,?,?,?,?,?)').run('m-out','abcd1234','5511988887777','oi','chat','sending','pending','now','wamid2');
+ s.ev.emit('messages.update',[{key:{id:'wamid2'},update:{status:3}}]);
+ await tick();
+ assert.equal(calls.length,2);
+ assert.deepEqual(calls[1].body,{event_type:'message_ack',data:{id:'wamid2',ack:'device'}});
+});

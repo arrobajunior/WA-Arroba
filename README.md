@@ -12,5 +12,6 @@ Consulte [publicação no Railway e contratos da API](DEPLOYMENT.md).
 - QR e credenciais: URL, ID e token.
 - Reconexão com credenciais persistentes.
 - API de texto, status, QR e histórico dos envios.
+- Webhook por instância: notifica um sistema externo (URL configurável no painel) a cada mensagem recebida, enviada ou confirmação de entrega — formato compatível com o payload do UltraMsg. Entrega best-effort, sem fila/retentativa; mídia ainda não é incluída no payload.
 
 Estado: implementação inicial, testes automatizados e geração real de QR verificados. Pareamento, envio/entrega em telefone real e execução da imagem Docker ainda precisam ser validados. Não é uma réplica completa da UltraMsg nem uma integração oficial da Meta.

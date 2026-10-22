@@ -15,6 +15,7 @@ function text(value,name,max,required=true){if(typeof value!=='string'||value.le
 function password(value){text(value,'senha',256);if(value.length<12)throw fail(400,'invalid_password','Use uma senha com pelo menos 12 caracteres.');return value;}
 function email(value){const v=text(value,'email',254).trim().toLowerCase();if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v))throw fail(400,'invalid_email','E-mail inválido.');return v;}
 function keys(value,allowed){if(Object.keys(value).some(k=>!allowed.includes(k)))throw fail(400,'invalid_field','Campo não reconhecido.');}
+function webhookUrl(value){if(value==null)return '';text(value,'webhook_url',2048,false);const v=value.trim();if(!v)return '';let u;try{u=new URL(v);}catch{throw fail(400,'invalid_webhook_url','URL de webhook inválida.');}if(!['http:','https:'].includes(u.protocol))throw fail(400,'invalid_webhook_url','URL de webhook deve usar http ou https.');return v;}
 async function body(req,maxBytes=65536){let size=0;const chunks=[];for await(const chunk of req){size+=chunk.length;if(size>maxBytes)throw fail(413,'body_too_large','Arquivo ou corpo da requisição muito grande.');chunks.push(chunk);}const raw=Buffer.concat(chunks).toString('utf8');if(!raw)return {};const type=(req.headers['content-type']||'').split(';')[0];let parsed;if(type==='application/x-www-form-urlencoded')parsed=Object.fromEntries(new URLSearchParams(raw));else if(type==='application/json'){try{parsed=JSON.parse(raw);}catch{throw fail(400,'invalid_json','JSON inválido.');}}else throw fail(415,'unsupported_type','Use JSON ou formulário.');if(!parsed||typeof parsed!=='object'||Array.isArray(parsed))throw fail(400,'invalid_body','Envie um objeto.');return parsed;}
 const json=(res,status,data)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8'});res.end(JSON.stringify(data));};
 
@@ -38,7 +39,7 @@ export async function createApp({dataDir=path.join(directory,'.data'),port=3210,
   const lookup=id=>{const row=db.prepare('SELECT * FROM instances WHERE id=?').get(id);if(!row)throw fail(404,'not_found','Instância não encontrada.');return row;};
   const authorize=(user,row)=>{if(user.role!=='admin'&&user.id!==row.owner_id)throw fail(404,'not_found','Instância não encontrada.');};
   const counts=id=>{const result={total:0,queue:0,sent:0,unsent:0,unknown:0,sending:0};for(const r of db.prepare('SELECT status,count(*) AS n FROM messages WHERE instance_id=? GROUP BY status').all(id)){result[r.status]=r.n;result.total+=r.n;}return result;};
-  const serialize=(row,secret=false)=>({id:row.id,name:row.name,phone:row.phone,owner_id:row.owner_id,owner_name:db.prepare('SELECT name FROM users WHERE id=?').get(row.owner_id)?.name,created_at:row.created_at,status:transport.state(row.id).status,error:transport.state(row.id).error,message_counts:counts(row.id),...(secret?{token:decrypt(row.token)}:{})});
+  const serialize=(row,secret=false)=>({id:row.id,name:row.name,phone:row.phone,owner_id:row.owner_id,owner_name:db.prepare('SELECT name FROM users WHERE id=?').get(row.owner_id)?.name,created_at:row.created_at,status:transport.state(row.id).status,error:transport.state(row.id).error,message_counts:counts(row.id),webhook_url:row.webhook_url||'',...(secret?{token:decrypt(row.token)}:{})});
   let shuttingDown=false;
   const server=http.createServer(async(req,res)=>{
     res.setHeader('Cache-Control','no-store');res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','no-referrer');
@@ -140,7 +141,16 @@ export async function createApp({dataDir=path.join(directory,'.data'),port=3210,
         const match=pathname.match(/^\/api\/instances\/([a-f0-9]{8})(?:\/(qr|connect|disconnect|token|messages))?$/);
         if(match){const [,id,action]=match,row=lookup(id);authorize(session,row);
           if(!action&&method==='GET')return json(res,200,{instance:serialize(row,true)});
-          if(!action&&method==='PATCH'){const input=await body(req);keys(input,['name']);db.prepare('UPDATE instances SET name=?,updated_at=? WHERE id=?').run(text(input.name,'nome',120).trim(),new Date().toISOString(),id);return json(res,200,{instance:serialize(lookup(id),true)});}
+          if(!action&&method==='PATCH'){
+            const input=await body(req);keys(input,['name','webhook_url']);
+            const sets=[],args=[];
+            if('name'in input){sets.push('name=?');args.push(text(input.name,'nome',120).trim());}
+            if('webhook_url'in input){sets.push('webhook_url=?');args.push(webhookUrl(input.webhook_url));}
+            if(!sets.length)throw fail(400,'invalid_field','Informe ao menos um campo para atualizar.');
+            sets.push('updated_at=?');args.push(new Date().toISOString(),id);
+            db.prepare(`UPDATE instances SET ${sets.join(',')} WHERE id=?`).run(...args);
+            return json(res,200,{instance:serialize(lookup(id),true)});
+          }
           if(action==='token'&&method==='POST'){keys(await body(req),[]);db.prepare('UPDATE instances SET token=? WHERE id=?').run(encrypt(randomBytes(32).toString('hex')),id);return json(res,200,{instance:serialize(lookup(id),true)});}
           if(action==='connect'&&method==='POST'){keys(await body(req),[]);transport.connect(id);return json(res,202,{instance:serialize(row,true)});}
           if(action==='disconnect'&&method==='POST'){keys(await body(req),[]);await transport.disconnect(id);return json(res,200,{instance:serialize(lookup(id),true)});}
@@ -176,7 +186,7 @@ export async function createApp({dataDir=path.join(directory,'.data'),port=3210,
       const data=await readFile(resolved);res.writeHead(200,{'Content-Type':({'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.js':'text/javascript; charset=utf-8','.svg':'image/svg+xml'})[path.extname(resolved)]||'application/octet-stream'});res.end(method==='HEAD'?undefined:data);
     }catch(e){if(!res.headersSent)json(res,e.status||500,{error:e.code||'internal_error',message:e.status?e.message:'Não foi possível concluir a operação. Tente novamente.'});else res.end();}
   });
-  function listMessages(res,id,url){const status=url.searchParams.get('status')||'',query=url.searchParams.get('query')||'';text(query,'busca',4096,false);if(status&&!['queue','sent','sending','unsent','unknown'].includes(status))throw fail(400,'invalid_status','Status inválido.');const where="instance_id=? AND (?='' OR status=?) AND (?='' OR instr(body,?)>0 OR instr(recipient,?)>0)";const args=[id,status,status,query,query,query];const rows=db.prepare(`SELECT id,recipient AS "to",body,status,ack,created_at,error FROM messages WHERE ${where} ORDER BY created_at DESC,id DESC LIMIT 100`).all(...args);const total=db.prepare(`SELECT count(*) AS n FROM messages WHERE ${where}`).get(...args).n;return json(res,200,{messages:rows,total,limit:100});}
+  function listMessages(res,id,url){const status=url.searchParams.get('status')||'',query=url.searchParams.get('query')||'';text(query,'busca',4096,false);if(status&&!['queue','sent','sending','unsent','unknown','received'].includes(status))throw fail(400,'invalid_status','Status inválido.');const where="instance_id=? AND (?='' OR status=?) AND (?='' OR instr(body,?)>0 OR instr(recipient,?)>0)";const args=[id,status,status,query,query,query];const rows=db.prepare(`SELECT id,recipient AS "to",body,status,ack,created_at,error FROM messages WHERE ${where} ORDER BY created_at DESC,id DESC LIMIT 100`).all(...args);const total=db.prepare(`SELECT count(*) AS n FROM messages WHERE ${where}`).get(...args).n;return json(res,200,{messages:rows,total,limit:100});}
   server.requestTimeout=30000;server.headersTimeout=15000;
   let stop;
   server.shutdown=()=>stop||=(async()=>{shuttingDown=true;const drained=new Promise(resolve=>server.close(resolve));server.closeIdleConnections();await drained;await transport.close();store.close();})();

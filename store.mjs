@@ -31,7 +31,7 @@ export function openStore(directory) {
     CREATE INDEX IF NOT EXISTS messages_instance_created ON messages(instance_id,created_at);
     CREATE TABLE IF NOT EXISTS wa_keys(instance_id TEXT NOT NULL REFERENCES instances(id),kind TEXT NOT NULL,key_id TEXT NOT NULL,value TEXT NOT NULL,PRIMARY KEY(instance_id,kind,key_id));`);
   const columns=(table)=>db.prepare(`PRAGMA table_info(${table})`).all().map(c=>c.name);
-  for(const [table,column,definition] of [['users','active','INTEGER NOT NULL DEFAULT 1'],['instances','owner_id','TEXT REFERENCES users(id)'],['instances','token_encrypted','INTEGER NOT NULL DEFAULT 0'],['instances','auto_connect','INTEGER NOT NULL DEFAULT 0'],['messages','provider_id','TEXT'],['messages','error','TEXT'],['messages','direction',"TEXT NOT NULL DEFAULT 'out'"]]) {
+  for(const [table,column,definition] of [['users','active','INTEGER NOT NULL DEFAULT 1'],['instances','owner_id','TEXT REFERENCES users(id)'],['instances','token_encrypted','INTEGER NOT NULL DEFAULT 0'],['instances','auto_connect','INTEGER NOT NULL DEFAULT 0'],['instances','webhook_url',"TEXT NOT NULL DEFAULT ''"],['messages','provider_id','TEXT'],['messages','error','TEXT'],['messages','direction',"TEXT NOT NULL DEFAULT 'out'"]]) {
     if(!columns(table).includes(column))db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   }
   db.exec('CREATE INDEX IF NOT EXISTS instances_owner ON instances(owner_id); CREATE INDEX IF NOT EXISTS sessions_expiry ON sessions(expires_at);');

@@ -127,3 +127,21 @@ test('branding is public, only Master can edit; images are decoded, persisted an
  assert.equal(removed.positive,null);assert.equal(removed.favicon,null);assert.equal(removed.negative,brand.negative);
  assert.equal((await fetch(app.base+brand.positive)).status,404);
 });
+
+test('instance webhook URL is validated, editable independently of the name, and visible to its owner only',async t=>{
+ const app=await fixture(t);const root=await login(app);
+ const bob={email:'bob2@example.com',password:'bob2-long-password'};
+ await app.request('/api/users',{method:'POST',cookie:root,data:{name:'bob2',...bob}});const bobCookie=await login(app,bob);
+ const i=(await app.request('/api/instances',{method:'POST',cookie:root,data:{name:'With webhook'}})).body.instance;
+ assert.equal(i.webhook_url,'');
+ for(const bad of ['not-a-url','ftp://example.com/hook','x'.repeat(2049)])
+  assert.equal((await app.request(`/api/instances/${i.id}`,{method:'PATCH',cookie:root,data:{webhook_url:bad}})).status,400);
+ const set=await app.request(`/api/instances/${i.id}`,{method:'PATCH',cookie:root,data:{webhook_url:'https://mfruralreport.up.railway.app/webhook/vendedor/3'}});
+ assert.equal(set.status,200);assert.equal(set.body.instance.webhook_url,'https://mfruralreport.up.railway.app/webhook/vendedor/3');assert.equal(set.body.instance.name,'With webhook');
+ const renamed=await app.request(`/api/instances/${i.id}`,{method:'PATCH',cookie:root,data:{name:'Renamed'}});
+ assert.equal(renamed.body.instance.webhook_url,'https://mfruralreport.up.railway.app/webhook/vendedor/3');assert.equal(renamed.body.instance.name,'Renamed');
+ const cleared=await app.request(`/api/instances/${i.id}`,{method:'PATCH',cookie:root,data:{webhook_url:''}});
+ assert.equal(cleared.body.instance.webhook_url,'');
+ assert.equal((await app.request(`/api/instances/${i.id}`,{method:'PATCH',cookie:bobCookie,data:{webhook_url:'https://example.com'}})).status,404);
+ assert.equal((await app.request(`/api/instances/${i.id}`,{method:'PATCH',cookie:root,data:{}})).status,400);
+});

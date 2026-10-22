@@ -1,9 +1,43 @@
 import makeWASocket, { BufferJSON, initAuthCreds, proto, DisconnectReason, Browsers, generateMessageID } from '@whiskeysockets/baileys';
 import pino from 'pino';
+import { randomBytes } from 'node:crypto';
+
+// ── Webhook de recebimento ──────────────────────────────────────────────────
+// Entrega best-effort (sem fila/retentativa): se o destino estiver fora do ar,
+// o evento é perdido e apenas registrado no log. Formato compatível com o
+// payload do UltraMsg (event_type/data), para funcionar sem alterações em
+// sistemas que já recebem webhooks daquele provedor.
+const WEBHOOK_TIMEOUT_MS=8000;
+async function deliverWebhook(url,payload) {
+  if(!url)return;
+  const controller=new AbortController();
+  const timer=setTimeout(()=>controller.abort(),WEBHOOK_TIMEOUT_MS);
+  try {
+    const res=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload),signal:controller.signal});
+    if(!res.ok)console.error(`[webhook] ${url} respondeu ${res.status}`);
+  } catch(e) {
+    console.error(`[webhook] falha ao entregar para ${url}: ${e.message}`);
+  } finally { clearTimeout(timer); }
+}
+// Extrai tipo e corpo de uma mensagem Baileys. Retorna null para tipos sem
+// conteúdo de usuário (reações, recibos, mensagens de protocolo etc.).
+function describeMessage(msg) {
+  const raw=msg.message||{};
+  const core=raw.ephemeralMessage?.message||raw.viewOnceMessage?.message||raw.viewOnceMessageV2?.message||raw;
+  if(core.conversation!=null)return {type:'chat',body:core.conversation};
+  if(core.extendedTextMessage)return {type:'chat',body:core.extendedTextMessage.text||''};
+  if(core.imageMessage)return {type:'image',body:core.imageMessage.caption||''};
+  if(core.videoMessage)return {type:'video',body:core.videoMessage.caption||''};
+  if(core.audioMessage)return {type:core.audioMessage.ptt?'ptt':'audio',body:''};
+  if(core.documentMessage)return {type:'document',body:core.documentMessage.caption||core.documentMessage.fileName||''};
+  if(core.stickerMessage)return {type:'sticker',body:''};
+  return null;
+}
 
 export function createTransport(store, { socketFactory=makeWASocket, retryDelay=2000 }={}) {
   const {db,encrypt,decrypt}=store, entries=new Map(), work=new Map();
   let closed=false;
+  const webhookFor=id=>db.prepare('SELECT webhook_url FROM instances WHERE id=?').get(id)?.webhook_url||'';
   const state=id=>{const e=entries.get(id);return {status:e?.status||'disconnected',qr:e?.qr||null,error:e?.error||null};};
   function auth(id,valid) {
     const read=(kind,key)=>{const r=db.prepare('SELECT value FROM wa_keys WHERE instance_id=? AND kind=? AND key_id=?').get(id,kind,key);return r?JSON.parse(decrypt(r.value),BufferJSON.reviver):null;};
@@ -49,7 +83,31 @@ export function createTransport(store, { socketFactory=makeWASocket, retryDelay=
       e.socket.ev.on('messages.update',updates=>{
         if(!valid())return;
         const labels={0:'error',1:'pending',2:'server',3:'device',4:'read',5:'played'};
-        for(const {key,update} of updates){if(update.status==null)continue;const ack=labels[update.status];if(!ack)continue;db.prepare("UPDATE messages SET ack=?,status=CASE WHEN ?=0 THEN 'unsent' WHEN ?>=2 THEN 'sent' ELSE status END WHERE instance_id=? AND provider_id=?").run(ack,update.status,update.status,id,key.id);}
+        for(const {key,update} of updates){
+          if(update.status==null)continue;
+          const ack=labels[update.status];if(!ack)continue;
+          db.prepare("UPDATE messages SET ack=?,status=CASE WHEN ?=0 THEN 'unsent' WHEN ?>=2 THEN 'sent' ELSE status END WHERE instance_id=? AND provider_id=?").run(ack,update.status,update.status,id,key.id);
+          const url=webhookFor(id);if(url)deliverWebhook(url,{event_type:'message_ack',data:{id:key.id,ack}});
+        }
+      });
+      // ── Mensagens recebidas (e enviadas fora da API) ──────────────────────
+      e.socket.ev.on('messages.upsert',({messages,type})=>{
+        if(!valid()||type!=='notify')return; // ignora replay de histórico em reconexões
+        const url=webhookFor(id);
+        for(const msg of messages) {
+          const jid=msg.key?.remoteJid||'';
+          if(!jid||jid==='status@broadcast'||jid.endsWith('@g.us')||jid.endsWith('@newsletter'))continue;
+          const desc=describeMessage(msg);if(!desc)continue;
+          const fromMe=!!msg.key.fromMe;
+          const ts=Number(msg.messageTimestamp)||Math.floor(Date.now()/1000);
+          const self=(e.socket.user?.id||'').split(':')[0].split('@')[0];
+          // Evita duplicar no histórico mensagens já registradas pelo envio via API (mesmo provider_id)
+          if(!db.prepare('SELECT 1 FROM messages WHERE instance_id=? AND provider_id=?').get(id,msg.key.id)){
+            db.prepare('INSERT INTO messages(id,instance_id,recipient,body,type,status,ack,created_at,provider_id,direction) VALUES(?,?,?,?,?,?,?,?,?,?)')
+              .run(randomBytes(12).toString('hex'),id,jid,desc.body,desc.type,fromMe?'sent':'received','device',new Date(ts*1000).toISOString(),msg.key.id,fromMe?'out':'in');
+          }
+          if(url)deliverWebhook(url,{event_type:fromMe?'message_create':'message_received',data:{id:msg.key.id,from:fromMe?self:jid,to:fromMe?jid:self,fromMe,body:desc.body,type:desc.type,time:ts,pushname:msg.pushName||''}});
+        }
       });
     }catch(error){e.status='disconnected';e.error='Falha ao iniciar conexão WhatsApp.';db.prepare('UPDATE instances SET auto_connect=0 WHERE id=?').run(id);throw error;}
     return state(id);
