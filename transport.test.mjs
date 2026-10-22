@@ -6,7 +6,7 @@ import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {openStore} from './store.mjs';
 import {createTransport} from './transport.mjs';
-async function setup(t){const dir=await mkdtemp(path.join(tmpdir(),'wa-transport-test-'));const store=openStore(dir),sockets=[];store.db.prepare('INSERT INTO users(id,name,email,password_hash,role,created_at) VALUES(?,?,?,?,?,?)').run('owner','Owner','owner@example.com','unused','user','now');store.db.prepare('INSERT INTO instances(id,name,token,created_at,updated_at) VALUES(?,?,?,?,?)').run('abcd1234','test',store.encrypt('token'),'now','now');store.db.prepare('UPDATE instances SET owner_id=?').run('owner');const transport=createTransport(store,{socketFactory:config=>{const s={ev:new EventEmitter(),user:{id:'5511999999999:1@s.whatsapp.net'},config,end(){},logout:async()=>{},sendMessage:async()=>({})};sockets.push(s);return s;},retryDelay:5});t.after(async()=>{await transport.close();store.close();await rm(dir,{recursive:true,force:true});});return {store,transport,sockets,dir};}
+async function setup(t,extra={}){const dir=await mkdtemp(path.join(tmpdir(),'wa-transport-test-'));const store=openStore(dir),sockets=[];store.db.prepare('INSERT INTO users(id,name,email,password_hash,role,created_at) VALUES(?,?,?,?,?,?)').run('owner','Owner','owner@example.com','unused','user','now');store.db.prepare('INSERT INTO instances(id,name,token,created_at,updated_at) VALUES(?,?,?,?,?)').run('abcd1234','test',store.encrypt('token'),'now','now');store.db.prepare('UPDATE instances SET owner_id=?').run('owner');const transport=createTransport(store,{socketFactory:config=>{const s={ev:new EventEmitter(),user:{id:'5511999999999:1@s.whatsapp.net'},config,end(){},logout:async()=>{},sendMessage:async()=>({}),updateMediaMessage:async()=>{}};sockets.push(s);return s;},retryDelay:5,...extra});t.after(async()=>{await transport.close();store.close();await rm(dir,{recursive:true,force:true});});return {store,transport,sockets,dir};}
 const tick=()=>new Promise(r=>setTimeout(r,20));
 test('QR lifecycle persists encrypted authentication, ignores stale events and handles logout',async t=>{
  const {store,transport,sockets,dir}=await setup(t);transport.connect('abcd1234');const first=sockets[0];first.ev.emit('connection.update',{qr:'test-qr'});assert.equal(transport.state('abcd1234').qr,'test-qr');transport.connect('abcd1234');assert.equal(sockets.length,1);
@@ -73,4 +73,54 @@ test('incoming message triggers UltraMsg-shaped webhook, is stored once, and ACK
  await tick();
  assert.equal(calls.length,2);
  assert.deepEqual(calls[1].body,{event_type:'message_ack',data:{id:'wamid2',ack:'device'}});
+});
+
+test('incoming audio is downloaded, hosted at the compatible /media route, included in the webhook and expires old entries',async t=>{
+ const audioBytes=Buffer.from('fake-ogg-audio-bytes');
+ const downloads=[];
+ const mediaDownloader=async(msg,type,opts,ctx)=>{downloads.push({id:msg.key.id,reuploadRequest:ctx.reuploadRequest});return audioBytes;};
+ const {store,transport,sockets}=await setup(t,{mediaBaseUrl:'https://wa.example.com',mediaDownloader});
+ store.db.prepare('UPDATE instances SET webhook_url=? WHERE id=?').run('https://example.com/hook','abcd1234');
+ const calls=[];const realFetch=globalThis.fetch;globalThis.fetch=async(url,opts)=>{calls.push(JSON.parse(opts.body));return {ok:true};};t.after(()=>{globalThis.fetch=realFetch;});
+ transport.connect('abcd1234');const s=sockets[0];s.ev.emit('connection.update',{connection:'open'});await tick();
+ s.ev.emit('messages.upsert',{type:'notify',messages:[{key:{id:'audio1',remoteJid:'5511988887777@s.whatsapp.net',fromMe:false},message:{audioMessage:{ptt:true,mimetype:'audio/ogg; codecs=opus'}},messageTimestamp:1700000001,pushName:'Cliente'}]});
+ await tick();
+ assert.equal(downloads.length,1);assert.equal(downloads[0].id,'audio1');assert.equal(typeof downloads[0].reuploadRequest,'function');
+ assert.equal(calls.length,1);
+ const token=store.decrypt(store.db.prepare('SELECT token FROM instances WHERE id=?').get('abcd1234').token);
+ assert.equal(calls[0].data.media,`https://wa.example.com/instanceabcd1234/media/audio1?token=${token}`);
+ assert.equal(calls[0].data.type,'ptt');
+ const stored=store.db.prepare("SELECT mimetype,data FROM media WHERE instance_id='abcd1234' AND message_id='audio1'").get();
+ assert.equal(stored.mimetype,'audio/ogg; codecs=opus');assert.deepEqual(Buffer.from(stored.data),audioBytes);
+ // An oversized download is not stored, and the webhook still fires but without a media URL.
+ const bigDownloader=async()=>Buffer.alloc(21*1024*1024);
+ const big=await setup(t,{mediaBaseUrl:'https://wa.example.com',mediaDownloader:bigDownloader});
+ big.store.db.prepare('UPDATE instances SET webhook_url=? WHERE id=?').run('https://example.com/hook','abcd1234');
+ globalThis.fetch=async(url,opts)=>{calls.push(JSON.parse(opts.body));return {ok:true};};
+ big.transport.connect('abcd1234');big.sockets[0].ev.emit('connection.update',{connection:'open'});await tick();
+ big.sockets[0].ev.emit('messages.upsert',{type:'notify',messages:[{key:{id:'audio2',remoteJid:'5511988887777@s.whatsapp.net',fromMe:false},message:{audioMessage:{ptt:true,mimetype:'audio/ogg'}},messageTimestamp:1700000002}]});
+ await tick();
+ assert.equal(calls.length,2);assert.equal(calls[1].data.media,undefined);
+ assert.equal(big.store.db.prepare("SELECT count(*) AS n FROM media WHERE message_id='audio2'").get().n,0);
+});
+
+test('webhook delivery retries on transient failure before giving up',async t=>{
+ const {store,transport,sockets}=await setup(t);
+ store.db.prepare('UPDATE instances SET webhook_url=? WHERE id=?').run('https://example.com/hook','abcd1234');
+ const realFetch=globalThis.fetch;t.after(()=>{globalThis.fetch=realFetch;});
+ // Fails twice (simulating a transient network blip), then succeeds — must not be lost.
+ let attempts=0;
+ globalThis.fetch=async()=>{attempts++;if(attempts<3)throw new Error('network blip');return {ok:true};};
+ transport.connect('abcd1234');const s=sockets[0];s.ev.emit('connection.update',{connection:'open'});await tick();
+ s.ev.emit('messages.upsert',{type:'notify',messages:[{key:{id:'retry1',remoteJid:'5511988887777@s.whatsapp.net',fromMe:false},message:{conversation:'oi'},messageTimestamp:1700000003}]});
+ await new Promise(r=>setTimeout(r,3200));
+ assert.equal(attempts,3);
+ // Permanent failure (every attempt rejected) is logged, not silently retried forever.
+ attempts=0;let gaveUp=false;
+ const realError=console.error;console.error=(...args)=>{if(args.join(' ').includes('após 3 tentativas'))gaveUp=true;};
+ globalThis.fetch=async()=>{attempts++;throw new Error('down');};
+ s.ev.emit('messages.upsert',{type:'notify',messages:[{key:{id:'retry2',remoteJid:'5511988887777@s.whatsapp.net',fromMe:false},message:{conversation:'oi de novo'},messageTimestamp:1700000004}]});
+ await new Promise(r=>setTimeout(r,3200));
+ console.error=realError;
+ assert.equal(attempts,3);assert.equal(gaveUp,true);
 });

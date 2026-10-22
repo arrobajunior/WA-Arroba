@@ -32,7 +32,8 @@ export async function createApp({dataDir=path.join(directory,'.data'),port=3210,
       db.prepare('UPDATE instances SET owner_id=? WHERE owner_id IS NULL').run(id);
     }
   }catch(e){store.close();throw e;}
-  const transport=transportFactory(store),attempts=new Map();
+  const mediaBaseUrl=publicOrigin||`http://127.0.0.1:${port}`;
+  const transport=transportFactory(store,{mediaBaseUrl}),attempts=new Map();
   const dummyHash=await passwordHash(randomBytes(32).toString('hex'));
   const secure=publicOrigin?.startsWith('https:');
   const cookie=(token,maxAge)=>`wa_session=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${secure?'; Secure':''}`;
@@ -159,7 +160,7 @@ export async function createApp({dataDir=path.join(directory,'.data'),port=3210,
         }
         throw fail(404,'not_found','Endpoint não encontrado.');
       }
-      const compat=pathname.match(/^\/instance([a-f0-9]{8})\/(instance\/status|instance\/qr|instance\/qrCode|messages\/chat|messages)$/);
+      const compat=pathname.match(/^\/instance([a-f0-9]{8})\/(instance\/status|instance\/qr|instance\/qrCode|messages\/chat|messages|media\/[A-Za-z0-9_-]{1,128})$/);
       if(compat){
         const [,id,action]=compat;const row=db.prepare('SELECT * FROM instances WHERE id=?').get(id);const input=method==='POST'?await body(req):{};
         const bearer=req.headers.authorization?.startsWith('Bearer ')?req.headers.authorization.slice(7):null;
@@ -168,6 +169,12 @@ export async function createApp({dataDir=path.join(directory,'.data'),port=3210,
         if(action==='instance/status'&&method==='GET')return json(res,200,{status:{accountStatus:transport.state(id).status}});
         if(['instance/qr','instance/qrCode'].includes(action)&&method==='GET'){const s=transport.state(id);if(action==='instance/qrCode')return json(res,200,{status:s.status,qrCode:s.qr});if(!s.qr)throw fail(409,'qr_unavailable','Gere o QR Code pelo painel.');res.writeHead(200,{'Content-Type':'image/png'});return res.end(await QRCode.toBuffer(s.qr,{width:280}));}
         if(action==='messages'&&method==='GET')return listMessages(res,id,url);
+        if(action.startsWith('media/')&&method==='GET'){
+          const file=db.prepare('SELECT mimetype,data FROM media WHERE instance_id=? AND message_id=?').get(id,action.slice(6));
+          if(!file)throw fail(404,'not_found','Mídia não encontrada — pode já ter expirado (retida por 24h).');
+          res.writeHead(200,{'Content-Type':file.mimetype,'Content-Length':file.data.length,'Cache-Control':'private, max-age=86400'});
+          return res.end(file.data);
+        }
         if(action==='messages/chat'&&method==='POST'){
           keys(input,['token','to','body']);const recipient=text(input.to,'destino',80),message=text(input.body,'mensagem',4096);
           if(!/^\+?\d{6,20}$/.test(recipient)&&!/^[0-9-]+@(c\.us|g\.us|s\.whatsapp\.net)$/.test(recipient))throw fail(400,'invalid_recipient','Use telefone internacional ou ID de grupo/contato.');
@@ -186,7 +193,19 @@ export async function createApp({dataDir=path.join(directory,'.data'),port=3210,
       const data=await readFile(resolved);res.writeHead(200,{'Content-Type':({'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.js':'text/javascript; charset=utf-8','.svg':'image/svg+xml'})[path.extname(resolved)]||'application/octet-stream'});res.end(method==='HEAD'?undefined:data);
     }catch(e){if(!res.headersSent)json(res,e.status||500,{error:e.code||'internal_error',message:e.status?e.message:'Não foi possível concluir a operação. Tente novamente.'});else res.end();}
   });
-  function listMessages(res,id,url){const status=url.searchParams.get('status')||'',query=url.searchParams.get('query')||'';text(query,'busca',4096,false);if(status&&!['queue','sent','sending','unsent','unknown','received'].includes(status))throw fail(400,'invalid_status','Status inválido.');const where="instance_id=? AND (?='' OR status=?) AND (?='' OR instr(body,?)>0 OR instr(recipient,?)>0)";const args=[id,status,status,query,query,query];const rows=db.prepare(`SELECT id,recipient AS "to",body,status,ack,created_at,error FROM messages WHERE ${where} ORDER BY created_at DESC,id DESC LIMIT 100`).all(...args);const total=db.prepare(`SELECT count(*) AS n FROM messages WHERE ${where}`).get(...args).n;return json(res,200,{messages:rows,total,limit:100});}
+  function listMessages(res,id,url){
+    const status=url.searchParams.get('status')||'',query=url.searchParams.get('query')||'';
+    text(query,'busca',4096,false);
+    if(status&&!['queue','sent','sending','unsent','unknown','received'].includes(status))throw fail(400,'invalid_status','Status inválido.');
+    const where="instance_id=? AND (?='' OR status=?) AND (?='' OR instr(body,?)>0 OR instr(recipient,?)>0)";
+    const args=[id,status,status,query,query,query];
+    const rows=db.prepare(`SELECT id,recipient AS "to",body,status,ack,created_at,error FROM messages WHERE ${where} ORDER BY created_at DESC,id DESC LIMIT 100`).all(...args);
+    // sent_at (epoch em segundos) no mesmo formato que o UltraMsg devolve — é o campo
+    // que o MF Rural usa para casar a confirmação de entrega com a mensagem salva.
+    const messages=rows.map(r=>({...r,sent_at:Math.floor(new Date(r.created_at).getTime()/1000)}));
+    const total=db.prepare(`SELECT count(*) AS n FROM messages WHERE ${where}`).get(...args).n;
+    return json(res,200,{messages,total,limit:100});
+  }
   server.requestTimeout=30000;server.headersTimeout=15000;
   let stop;
   server.shutdown=()=>stop||=(async()=>{shuttingDown=true;const drained=new Promise(resolve=>server.close(resolve));server.closeIdleConnections();await drained;await transport.close();store.close();})();

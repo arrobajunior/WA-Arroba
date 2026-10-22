@@ -6,6 +6,7 @@ import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {once} from 'node:events';
 import {createApp} from './server.mjs';
+import {openStore} from './store.mjs';
 const admin={email:'admin@example.com',password:'administrator-test-password'};
 const fakeTransport=()=>({state:()=>({status:'disconnected',qr:null}),connect:()=>{},disconnect:async()=>{},flush:()=>{},restore:()=>{},close:async()=>{}});
 async function start(dataDir,options={}){
@@ -40,7 +41,11 @@ test('token authentication, queued messages, rotation and persistence',async t=>
  const route=`/instance${i.id}`;assert.equal((await app.request(route+'/instance/status?token=wrong')).status,401);
  assert.equal((await app.request(route+'/messages/chat',{method:'POST',data:{token:i.token,to:'5511999999999',body:'Order 123'}})).status,202);
  assert.equal((await app.request(route+'/instance/status',{headers:{Authorization:`Bearer ${i.token}`}})).body.status.accountStatus,'disconnected');
- assert.equal((await app.request(route+'/messages',{headers:{Authorization:`Bearer ${i.token}`}})).body.total,1);
+ const listed=(await app.request(route+'/messages',{headers:{Authorization:`Bearer ${i.token}`}})).body;
+ assert.equal(listed.total,1);
+ // sent_at (epoch seconds) is the UltraMsg-shaped field MF Rural's ack-polling fallback keys its date-window match on.
+ assert.equal(typeof listed.messages[0].sent_at,'number');
+ assert.ok(Math.abs(listed.messages[0].sent_at - Math.floor(Date.now()/1000)) < 10);
  await app.close();app=await start(dir);cookie=await login(app);
  const retained=(await app.request(`/api/instances/${i.id}`,{cookie})).body.instance;assert.equal(retained.token,i.token);assert.equal(retained.message_counts.queue,1);
  const rotated=(await app.request(`/api/instances/${i.id}/token`,{method:'POST',cookie,data:{}})).body.instance;
@@ -144,4 +149,18 @@ test('instance webhook URL is validated, editable independently of the name, and
  assert.equal(cleared.body.instance.webhook_url,'');
  assert.equal((await app.request(`/api/instances/${i.id}`,{method:'PATCH',cookie:bobCookie,data:{webhook_url:'https://example.com'}})).status,404);
  assert.equal((await app.request(`/api/instances/${i.id}`,{method:'PATCH',cookie:root,data:{}})).status,400);
+});
+
+test('downloaded media is served at the UltraMsg-compatible /media route, gated by the instance token',async t=>{
+ const app=await fixture(t);const root=await login(app);
+ const i=(await app.request('/api/instances',{method:'POST',cookie:root,data:{name:'Media test'}})).body.instance;
+ const got=(await app.request(`/api/instances/${i.id}`,{cookie:root})).body.instance;
+ const store=openStore(app.directory);
+ store.db.prepare('INSERT INTO media(instance_id,message_id,mimetype,data,created_at) VALUES(?,?,?,?,?)').run(i.id,'audio1','audio/ogg; codecs=opus',Buffer.from('fake-audio-bytes'),new Date().toISOString());
+ store.close();
+ const ok=await fetch(`${app.base}/instance${i.id}/media/audio1?token=${got.token}`);
+ assert.equal(ok.status,200);assert.equal(ok.headers.get('content-type'),'audio/ogg; codecs=opus');
+ assert.equal(Buffer.from(await ok.arrayBuffer()).toString(),'fake-audio-bytes');
+ assert.equal((await fetch(`${app.base}/instance${i.id}/media/audio1?token=wrong`)).status,401);
+ assert.equal((await fetch(`${app.base}/instance${i.id}/media/does-not-exist?token=${got.token}`)).status,404);
 });

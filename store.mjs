@@ -29,7 +29,9 @@ export function openStore(directory) {
     CREATE TABLE IF NOT EXISTS instances(id TEXT PRIMARY KEY,name TEXT NOT NULL,phone TEXT NOT NULL DEFAULT '',token TEXT NOT NULL,settings TEXT NOT NULL DEFAULT '{}',created_at TEXT NOT NULL,updated_at TEXT NOT NULL,owner_id TEXT REFERENCES users(id),token_encrypted INTEGER NOT NULL DEFAULT 1,auto_connect INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE IF NOT EXISTS messages(id TEXT PRIMARY KEY,instance_id TEXT NOT NULL REFERENCES instances(id),recipient TEXT NOT NULL,body TEXT NOT NULL,type TEXT NOT NULL,status TEXT NOT NULL,ack TEXT NOT NULL,created_at TEXT NOT NULL,provider_id TEXT,error TEXT,direction TEXT NOT NULL DEFAULT 'out');
     CREATE INDEX IF NOT EXISTS messages_instance_created ON messages(instance_id,created_at);
-    CREATE TABLE IF NOT EXISTS wa_keys(instance_id TEXT NOT NULL REFERENCES instances(id),kind TEXT NOT NULL,key_id TEXT NOT NULL,value TEXT NOT NULL,PRIMARY KEY(instance_id,kind,key_id));`);
+    CREATE TABLE IF NOT EXISTS wa_keys(instance_id TEXT NOT NULL REFERENCES instances(id),kind TEXT NOT NULL,key_id TEXT NOT NULL,value TEXT NOT NULL,PRIMARY KEY(instance_id,kind,key_id));
+    CREATE TABLE IF NOT EXISTS media(instance_id TEXT NOT NULL REFERENCES instances(id),message_id TEXT NOT NULL,mimetype TEXT NOT NULL,data BLOB NOT NULL,created_at TEXT NOT NULL,PRIMARY KEY(instance_id,message_id));
+    CREATE INDEX IF NOT EXISTS media_created ON media(created_at);`);
   const columns=(table)=>db.prepare(`PRAGMA table_info(${table})`).all().map(c=>c.name);
   for(const [table,column,definition] of [['users','active','INTEGER NOT NULL DEFAULT 1'],['instances','owner_id','TEXT REFERENCES users(id)'],['instances','token_encrypted','INTEGER NOT NULL DEFAULT 0'],['instances','auto_connect','INTEGER NOT NULL DEFAULT 0'],['instances','webhook_url',"TEXT NOT NULL DEFAULT ''"],['messages','provider_id','TEXT'],['messages','error','TEXT'],['messages','direction',"TEXT NOT NULL DEFAULT 'out'"]]) {
     if(!columns(table).includes(column))db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
