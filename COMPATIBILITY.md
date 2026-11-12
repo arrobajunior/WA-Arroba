@@ -1,41 +1,49 @@
-# Compatibilidade UltraMsg — auditoria em andamento
+# Compatibilidade com UltraMsg
 
-Referências públicas consultadas em 12/11/2026:
-- https://docs.ultramsg.com/
-- https://github.com/ultramsg/whatsapp-nodejs-sdk
-- https://blog.ultramsg.com/send-whatsapp-message-by-whatsapp-api-c-sharp/
-- https://blog.ultramsg.com/receive-whatsapp-api-messages-use-webhook-nodejs/
+Referências consultadas em 12/11/2026: [documentação oficial](https://docs.ultramsg.com/), [SDK oficial](https://github.com/ultramsg/whatsapp-nodejs-sdk), [resposta de envio](https://blog.ultramsg.com/send-whatsapp-message-by-whatsapp-api-c-sharp/), [consulta/ACK](https://blog.ultramsg.com/whatsapp-message-delivery-read-status-ack/) e [webhook completo](https://github.com/ultramsg/whatsapp-webhook-csharp).
 
-Não é uma declaração de paridade de 100%. Mesmo nome de endpoint não prova equivalência de resposta, efeitos, erros e eventos. O SDK público também não contém necessariamente todas as operações atuais da documentação. A validação de contrato com o MF Rural e uma instância UltraMsg ainda não foi feita. Não precisa fornecer senha para consultar essas referências públicas.
+A aplicação preserva os nomes de comandos e campos nos fluxos abaixo. O domínio, a instância e o token são os deste serviço. A equivalência integral com todas as particularidades da UltraMsg não foi certificada por comparação com uma conta real ou com o cliente MF Rural. Não se deve anunciar paridade de 100% com base apenas nos testes simulados.
 
-## Alterações desta proposta
+## Rotas implementadas
 
-| Área | Implementado nesta proposta | Pendência para equivalência integral |
-|---|---|---|
-| Autenticação | Campo token em formulário/JSON/query, Bearer adicional | Formato exato de todos os erros |
-| POST messages/chat | body, to, priority, referenceId, HTTP 200 e sent="true", message="ok" | IDs ainda são strings locais, não números; payload completo de erros |
-| POST messages/image | image URL/base64, caption, priority, referenceId; 16 MB | Validar GIF/BMP com dispositivo real, nocache aceito mas sem cache permanente |
-| POST messages/audio | audio URL/base64; 16 MB | Confirmar codecs em dispositivo real |
-| POST messages/voice | campo audio OGG/Opus, rota própria; 16 MB | Confirmar reprodução real |
-| POST messages/video | video URL/base64, caption; 32 MB | Confirmar reprodução/codec real |
-| POST messages/document | document URL/base64, filename, caption; 30 MB | Confirmar tipos Office/PDF em dispositivo real |
-| GET messages | all, paginação, limit, sort; referenceId no registro | Filtros id/referenceId/from/to/ack, datas/campos/IDs e envelope exatos |
-| Webhooks | event_type, instanceId, data, ack e referenceId quando conhecido; media link | Conferir formato de JIDs, IDs e datas com cliente e serviço real; flags configuráveis |
-| instance/status, qr, qrCode | Rotas existentes preservadas | Conferir formatos/estados exatos e inicialização automática de QR |
-| Outras operações de envio | Não implementadas | link, contact, location, vcard, sticker, reaction, etc. |
-| Gestão da instância | Painel próprio existente | settings, me, restart, logout, takeover, clear, screenshot |
-| Gestão de mensagens | Fila e status locais | statistics, resendById, resendByStatus, clear |
-| Conversas/contatos/grupos | Não implementados | Rotas e formatos de chats, contacts e groups |
-| media/upload | Não implementado | Semântica de upload temporário equivalente |
+| Área | Rotas / comportamento |
+|---|---|
+| Envio | POST messages/chat, image, audio, voice, video, document, sticker, link, contact, location, vcard |
+| Formulário | token no corpo; application/x-www-form-urlencoded e JSON; multipart adicional para mídias |
+| Parâmetros | to, campo do tipo de mídia, caption, filename, priority, referenceId; voice usa audio OGG/Opus |
+| Retorno de envio | HTTP 200, sent="true", message="ok", id numérico estável; aceitação pela fila, não confirmação de entrega |
+| Consulta | GET messages: total/pages/limit/page/messages, IDs numéricos, datas epoch, from/to @c.us, priority, referenceId, status, ack, type, body e metadata |
+| Filtros | id, referenceId, from, to, ack, status (incluindo all), page, limit, sort |
+| Fila | GET messages/statistics; POST messages/resendById, resendByStatus, clear; prioridade crescente; expiração após 24h |
+| Ações em mensagem | POST messages/reaction e messages/delete com msgId composto |
+| Instância | GET instance/status, qr, qrCode, me, settings; POST instance/settings, restart, takeover, logout, clear |
+| Settings | sendDelay/sendDelayMax; webhook_url e flags received/create/ack/download_media |
+| Upload | POST media/upload retorna url temporária utilizável nos comandos de envio |
+| Contatos | GET contacts, contacts/ids, contact, image, check, invalid, blocked; POST contacts/block, unblock |
+| Conversas | GET chats, chats/ids, chats/messages; POST chats/read, archive, unarchive, delete, clearMessages |
+| Grupos | GET groups, groups/ids, groups/group; envio e recebimento de mensagens em grupo |
+| Webhooks | event_type, instanceId, id e referenceId; data com id composto, from/to/author normalizados, body, type, media, flags e contexto básico; ACKs não regridem |
 
-## Armazenamento e diferença deliberada
+## Limites e diferenças explícitas
 
-Nesta proposta, novas mídias não são gravadas no SQLite, disco ou S3. Arquivos passam por memória (até 128 MB por processo, arquivos de no máximo 32 MB) e são descartados após uma hora; mídia de saída é descartada após o envio. O cliente precisa baixar e arquivar o que receber. Links deixam de funcionar ao reiniciar. Filas de mídia com bytes perdidos no reinício são marcadas como unsent, sem reenvio silencioso. Isso tem limitações diferentes de uma fila persistente e precisa ser aceito no contrato do cliente.
+- `instance/screenshot` retorna **501**. Baileys não mantém uma janela de WhatsApp Web: não há screenshot real para retornar. Uma imagem simulada não substitui essa operação.
+- Contatos, conversas e últimas mensagens usam um cache limitado em memória e só incluem dados sincronizados na sessão. Não é uma cópia completa do histórico do telefone. Reiniciar descarta esse cache.
+- Preview de links, campos de contexto/quotes avançados, respostas de erros e comportamentos específicos do provedor/WhatsApp não têm equivalência byte a byte certificada. Um link é enviado como texto contendo a URL, sem baixar páginas arbitrárias para gerar preview.
+- `nocache` é aceito para compatibilidade; a aplicação não mantém cache permanente de mídia. URLs públicas são validadas e baixadas a cada solicitação, sem acesso a destinos privados.
+- Imagens JPEG, PNG e WebP são aceitas; GIF/BMP são convertidos em memória (GIF usa o primeiro quadro). Figurinha é convertida para WebP. Vídeo aceita MP4/3GP/MOV; voz requer OGG/Opus. Não há conversão geral de codecs de vídeo/voz.
+- Arquivos: imagem/áudio/voz/figurinha até 16 MB, documento até 30 MB, vídeo até 32 MB; base64 até 10.000.000 caracteres.
+- Uma requisição aceita não comprova entrega. A confirmação vem de ACK device/read/played; falhas de envio ambíguas permanecem unknown para não duplicar silenciosamente. Reenvio é uma ação explícita do cliente.
 
-A UltraMsg documenta retenção de logs/mídias por 60 dias: https://blog.ultramsg.com/whatsapp-api-by-ultramsg-faq/. Portanto, zero retenção permanente aqui é uma escolha específica solicitada pelo proprietário e não replica essa retenção do serviço de referência.
+## Armazenamento: o cliente arquiva as mídias
 
-O banco operacional continua necessário para usuários, permissões, sessões WhatsApp, fila, histórico/status e textos. A proposta não apaga arquivos antigos nem dados existentes. Rotas de leitura legadas ainda podem acessar mídias já gravadas anteriormente. As variáveis S3 existentes não são removidas e nenhum objeto da bucket é apagado. A leitura legada não faz upload novo.
+**Novos arquivos não são gravados em SQLite, disco persistente ou bucket S3.** Há apenas retransmissão temporária em memória, limitada a 128 MB por processo. Links de recebimento/upload usam capacidades aleatórias vinculadas à instância, sem o token geral da API. Expiram em uma hora ou ao reiniciar. O cliente deve baixar e armazenar imediatamente em seu próprio banco/bucket. O motor WhatsApp/FFmpeg pode usar arquivos de trabalho temporários durante transmissão/conversão, nunca como arquivo definitivo.
 
-## Segurança de downloads por URL
+Envios por URL guardam apenas uma referência criptografada na fila operacional: o arquivo pode ser baixado novamente da origem ao retomar/repetir. URLs assinadas do cliente precisam continuar válidas. Envios base64/multipart perdem os bytes ao reiniciar e são marcados unsent; o cliente precisa enviar o arquivo novamente. Reenvio de mídia temporária expirada sem origem URL retorna 409. A memória permanece limitada também durante downloads recebidos.
 
-URLs HTTP/HTTPS públicas são baixadas com DNS validado e fixado na conexão, sem cookies/tokens do cliente; cada redirecionamento é revalidado. Endereços privados, loopback, link-local e reservados são bloqueados. Downloads têm limite de tamanho e timeout. Não permite acessar URLs internas do ambiente Railway.
+Usuários, permissões, credenciais WhatsApp criptografadas, configurações, textos e status/fila continuam no banco operacional. Isso não é uma implementação sem banco nem sem histórico de texto. Não apagamos dados, credenciais ou objetos S3 existentes durante a implantação. Leitura legada continua disponível; nenhuma mídia nova vai para S3. `instance/clear` apaga apenas o estado operacional da instância explicitamente solicitada e volta ao pareamento, como documentado pelo provedor; não remove usuários ou o Admin Master e não apaga objetos antigos da bucket.
+
+A própria UltraMsg [documenta retenção de logs/mídias por 60 dias](https://blog.ultramsg.com/whatsapp-api-by-ultramsg-faq/). A ausência de arquivamento permanente de novas mídias aqui é uma escolha solicitada para este serviço e difere dessa retenção.
+
+## Verificação
+
+Testes cobrem formulário HTTP, IDs e filtros, timestamps, ACK monotônico, prioridade/reenvio, settings/flags, upload/download temporário, ausência de bytes dos arquivos no SQLite, payloads de mídia, normalização de JIDs, grupos, ações de contato/chat, reset isolado, migração e proteção de Master/USER/ADMIN. Transporte WhatsApp e serviços externos são simulados. Conversão BMP/WebP usa FFmpeg/Sharp reais nos testes locais. O teste de envio a um telefone real e a homologação do MF Rural ainda são necessários.

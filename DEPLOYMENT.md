@@ -1,140 +1,55 @@
-# WhatsApp API — publicação no Railway
+# Implantação e operação
 
-> Esta proposta altera o fluxo de novas mídias: não há novas gravações em S3/SQLite. Consulte COMPATIBILITY.md para o contrato atual e suas limitações. A seção de S3 abaixo descreve a versão anterior e só permanece relevante para leitura de arquivos legados.
+## Serviço existente no Railway
 
+Repositório `arrobajunior/WA-Arroba`, branch `main`, projeto Whatsapp-API, serviço WA-Arroba, ambiente production. Use o Dockerfile da raiz e mantenha o volume existente em `/app/data`. Não remova nem recrie o volume.
 
-## O que esta versão faz
+| Variável | Uso |
+|---|---|
+| PUBLIC_URL | Origem HTTPS exata, sem caminho; necessária para acesso externo e links do webhook |
+| ADMIN_EMAIL | E-mail do Master na primeira execução |
+| ADMIN_PASSWORD ou ADMIN_PASSWORD_FILE | Senha inicial de pelo menos 12 caracteres; mudar variável não troca senha já cadastrada |
+| DATA_DIR | `/app/data` |
+| HOST | `0.0.0.0` no Railway |
+| PORT | `3210` ou a porta configurada no domínio |
+| RAILWAY_RUN_UID | A instalação existente usa 0 para acessar o volume; isso executa como root no container |
 
-- Admin Master entra com e-mail e senha, cria/edita usuários, bloqueia acessos, redefine senhas e vê todas as instâncias.
-- Admin Master personaliza nome, logos positiva/negativa e favicon em **Administração → Identidade visual**. Imagens PNG/JPG/WebP até 1 MB são convertidas para PNG estático e salvas no banco.
-- O bloqueio revoga sessões do painel, recusa a API do usuário e pausa novos envios da fila. Envios já em andamento podem terminar; sessões WhatsApp e dados são preservados. Reativar retoma a fila quando a conexão está ativa.
-- USER entra com e-mail e senha e só gerencia suas próprias instâncias. ADMIN vê e gerencia todas as instâncias e pode criar/editar contas USER e ADMIN.
-- Em Administração, escolha o perfil no cadastro ou em Gerenciar acesso. Contas existentes continuam USER até promoção explícita. Mudanças de perfil encerram as sessões da conta.
-- O Master original é identificado na migração e protegido contra exclusão, bloqueio e rebaixamento, inclusive por triggers no banco. Outros ADMINs não podem alterar seus dados; identidade visual permanece exclusiva do Master. Não há endpoint de exclusão de contas.
-- Cada instância tem nome, URL da API, ID, token e conexão por QR Code.
-- Baileys 6.7.24 conecta ao WhatsApp Web. Não depende da UltraMsg nem usa sua API. Não é a API oficial da Meta.
-- Sessões e chaves do WhatsApp são armazenadas em SQLite, com criptografia AES-256-GCM. Senhas usam scrypt e sessões administrativas expiram em 12 horas.
-- Conexões são retomadas ao reiniciar, com tentativas limitadas. Logout explícito exige novo pareamento.
-- API para status, QR, envio de texto e consulta dos envios. Fila persistente; retorno 202 significa aceito, não entregue. O ACK indica confirmação de servidor/dispositivo/leitura.
-- Em falhas de envio ambíguas, a mensagem fica `unknown` e não é reenviada automaticamente, evitando duplicação silenciosa.
+Configure uma réplica, sem serverless/sleep, healthcheck `/api/health`, timeout 60s. A aplicação mantém sessões WhatsApp abertas e um SQLite por processo. O Dockerfile instala FFmpeg para mídias/miniaturas e conversão BMP; usa node por padrão, antes do override de UID do serviço.
 
-Não inclui cobrança, plano comercial, bots, recuperação de senha por e-mail, exclusão de usuários ou paridade completa com a UltraMsg. O histórico cobre envios desta API. A validação de pareamento e entrega com um número real ainda depende do operador.
+A implantação faz migrações aditivas: preserva usuários, perfis, instâncias, tokens e sessões. Adiciona IDs numéricos de mensagens, configurações de fila e referências de mídia. IDs de mensagens antigos continuam aceitos como filtro adicional; os IDs das instâncias não mudam. Arquivos antigos não são apagados. APIs administrativas continuam com autenticação de sessão e proteção CSRF; os comandos de integração usam token da instância.
 
-## Railway: configuração inicial
+## Integração do cliente
 
-O repositório privado da aplicação é `arrobajunior/WA-Arroba`, com os arquivos na raiz. Não publique o checkout do REA, `node_modules`, `.data`, `.env`, backups ou credenciais. O Dockerfile deve estar na raiz desse novo repositório.
+Base: `https://SEU_DOMINIO/instance{ID}/`. Use os mesmos caminhos/campos dos comandos UltraMsg listados em [COMPATIBILITY.md](COMPATIBILITY.md). Substitua domínio, instância e token. `token` é aceito em formulário/JSON/query GET; Bearer é adicional. A ausência de screenshot e as diferenças listadas devem ser consideradas na homologação, sem promessa de paridade de 100%.
 
-Destino consultado em 19/10/2026: projeto **Whatsapp-API**, ambiente **production**. Na consulta existia apenas um serviço vazio em criação pendente (`harmonious-encouragement`), sem deploy, volume ou bucket. Nenhuma mudança externa foi aplicada nesta entrega.
-
-1. No Railway, abra esse serviço e conecte `arrobajunior/WA-Arroba` e a branch `main`. Use o **Dockerfile** da raiz. Se preferir manter o diretório `platform` no novo repositório, configure Root Directory como `/platform`.
-2. Antes do primeiro deploy, anexe um **volume persistente** em `/app/data`. Não use o disco efêmero para os dados. Banco SQLite, identidade visual, credenciais e sessões ficam nesse volume; PostgreSQL, Redis e bucket não são necessários neste escopo.
-3. Configure as variáveis do serviço:
-
-| Variável | Valor |
-| --- | --- |
-| `PUBLIC_URL` | `https://SEU-DOMINIO`, sem caminho; deve coincidir com o domínio acessado |
-| `ADMIN_EMAIL` | E-mail do primeiro Admin Master |
-| `ADMIN_PASSWORD` | Senha inicial forte, com pelo menos 12 caracteres; configure como segredo no Railway |
-| `DATA_DIR` | `/app/data` |
-| `HOST` | `0.0.0.0` |
-| `PORT` | `3210` (se alterar, use a mesma porta no domínio Railway) |
-| `RAILWAY_RUN_UID` | `0`, necessário para escrever no volume montado pelo Railway com proprietário root |
-
-A imagem usa o usuário `node` por padrão. O override `RAILWAY_RUN_UID=0` segue a orientação do Railway para permissões dos volumes; o processo nesse serviço executará como root no container. Fonte: [Volumes — caveats](https://docs.railway.com/volumes/reference#caveats).
-
-4. Configure **uma réplica**, desligue **Serverless / sleep** e defina Healthcheck Path como `/api/health`, timeout de 60 segundos e reinício em falha. A aplicação precisa manter as conexões WhatsApp abertas. Ela respeita `PORT` e aceita o host do healthcheck do Railway nesse endpoint público.
-5. Gere o domínio Railway (ou adicione seu domínio), porta de destino 3210, e ajuste `PUBLIC_URL` ao endereço HTTPS exato. HTTPS é terminado no Railway; Caddy não é necessário.
-6. Revise as mudanças pendentes, publique e aguarde o healthcheck. Faça login, abra **Administração**, personalize a marca e crie os usuários. Cada usuário pode criar a instância e ler seu QR em WhatsApp → Dispositivos conectados → Conectar dispositivo.
-7. Valide pareamento, envio e ACK com um número de teste antes de usar a integração real. Reinicie o serviço e confirme que dados e sessão persistiram.
-
-Após a configuração inicial, pushes na branch conectada poderão disparar novos deploys. O volume precisa permanecer anexado ao mesmo serviço. Não use múltiplas réplicas: o banco e as conexões desta versão pertencem a um único processo. A capacidade por RAM/CPU ainda não foi medida. Limites iniciais: 50 instâncias por usuário, 1.000 mensagens pendentes por instância.
-
-A senha de bootstrap só cria a conta quando não há administrador. Alterar `ADMIN_PASSWORD` depois não muda uma senha existente: use **Administração → Gerenciar acesso**. Após validar o primeiro acesso, o segredo de bootstrap pode ser removido; preserve o banco. A instalação de um banco novo sem credenciais iniciais falha explicitamente.
-
-Não foi adicionado `railway.json`: a documentação consultada informa que novos serviços devem usar configurações do painel/API ou IaC, e que Config as Code legado foi descontinuado. O Dockerfile permanece o contrato de build. [Documentação Railway](https://docs.railway.com/infrastructure-as-code).
-
-## Docker Compose opcional
-
-O `compose.yaml` permanece disponível para instalações fora do Railway. Copie `.env.example` para `.env`, defina `APP_DOMAIN` e `ADMIN_EMAIL` e crie a senha em `secrets/admin_password.txt`. O arquivo precisa ser legível pelo usuário `node` do container; mantenha o diretório `secrets` privado no host. Use `docker compose --profile gateway up -d --build` se precisar do Caddy, ou `docker compose up -d --build` com seu próprio proxy HTTPS. O Railway não executa esse Compose automaticamente.
-
-## Integração
-
-Prefixo: `https://SEU_APP_DOMAIN/instance{ID}/`.
-
-| Método | Caminho | Resultado |
-| --- | --- | --- |
-| GET | `instance/status` | Estado da conexão |
-| GET | `instance/qr` | Imagem PNG do QR atual |
-| GET | `instance/qrCode` | QR textual em JSON |
-| POST | `messages/chat` | Adiciona texto à fila de envio |
-| GET | `messages` | Até 100 envios mais recentes, com status/ACK |
-
-Use `Authorization: Bearer SEU_TOKEN`. Também são aceitos `token` no corpo de POST e `?token=` em GET para integrações existentes. Prefira o cabeçalho, pois URLs podem ser registradas por proxies.
-
-Corpo do envio, JSON ou formulário:
-
-```json
-{"to":"5511999999999","body":"Olá!"}
-```
-
-`to` aceita telefone internacional, contato `@c.us`/`@s.whatsapp.net` ou grupo `@g.us`. Texto até 4.096 caracteres. A fila é processada com intervalo de um segundo por instância. Renovar um token revoga imediatamente o anterior. O painel não oferece botão de envio; o envio é realizado pelo sistema integrado.
-
-## Persistência, atualização e backup
-
-`/app/data` contém banco, WAL e `master.key`. O volume preserva dados ao recriar containers. Guarde banco e chave juntos em backups protegidos e fora do serviço; só o banco não basta para restaurar as credenciais criptografadas.
-
-No Railway, configure backups do volume e teste uma restauração isolada preservando banco e chave. Não remova nem recrie o volume durante o deploy.
-
-Em Docker Compose, atualização: depois de trazer o novo código, execute o mesmo `docker compose ... up -d --build` usado no deploy. **Não use `down -v`**, pois remove o volume.
-
-Backup consistente com breve parada:
+Exemplo de envio por formulário:
 
 ```sh
-docker compose stop app
-docker compose run --rm --no-deps --entrypoint tar app -C /app/data -czf - . > backup-wa.tgz
-docker compose start app
+curl -X POST 'https://SEU_DOMINIO/instanceSEU_ID/messages/document' \
+  --data-urlencode 'token=SEU_TOKEN' \
+  --data-urlencode 'to=5511999999999' \
+  --data-urlencode 'filename=proposta.pdf' \
+  --data-urlencode 'document=https://sistema-do-cliente.example/proposta.pdf' \
+  --data-urlencode 'caption=Sua proposta' \
+  --data-urlencode 'referenceId=pedido-123'
 ```
 
-Verifique o código de saída e o arquivo antes de enviá-lo ao armazenamento de backup. A restauração precisa ser ensaiada em um volume separado antes de substituir dados de produção. Este projeto ainda não automatiza backup nem atesta uma restauração de produção.
+HTTP 200 com `{"sent":"true","message":"ok","id":123}` confirma aceitação pela fila. Confira ACK antes de tratar como entregue. A fila respeita priority, sendDelay/sendDelayMax e expiração de 24h. Envios ambíguos ficam unknown; não são reenviados automaticamente. As configurações e flags de webhook podem ser alteradas em instance/settings ou a URL no painel.
 
-A chave está no mesmo volume para permitir reinstalação simples. Ela protege a leitura isolada do banco, mas não protege contra acesso a todo o volume/host.
+## Mídias e retenção
+
+O cliente baixa os anexos de `data.media` e os salva no próprio armazenamento. Os links são temporários de uma hora, também invalidados ao reiniciar o processo. O cache total tem limite de 128 MB; uploads podem receber 503 quando a capacidade está esgotada. Arquivos base64/multipart ainda em fila se perdem no reinício e tornam-se unsent. URLs de origem criptografadas permitem baixar novamente do cliente; sua validade precisa cobrir a fila/reenvio.
+
+Não há novos uploads para bucket ou blobs de mídia no SQLite. As variáveis S3_ENDPOINT, S3_BUCKET, S3_REGION, S3_ACCESS_KEY_ID e S3_SECRET_ACCESS_KEY existentes são usadas **apenas para leitura legada sob demanda**. Nenhum objeto S3 é removido pela implantação. O banco operacional conserva usuários, sessões, textos e status/fila; não é zero retenção de todo tipo de dado.
+
+Destinos de download HTTP/HTTPS devem ser públicos. DNS é validado/fixado por conexão e cada redirect é revalidado; rede privada, loopback e link-local são bloqueados. Credenciais S3 e tokens da instância não são enviados às URLs fornecidas pelo cliente.
+
+## Backup e reinício
+
+O volume contém platform.sqlite, WAL e master.key. Banco e chave precisam ser preservados e copiados juntos de forma consistente; só o banco não recupera as credenciais criptografadas. Configure backup do volume e ensaie restauração separada. Não use `docker compose down -v`.
+
+Ao reiniciar, sessões WhatsApp são retomadas com tentativas limitadas. Sessões do painel expiram em 12h; alterações de senha/e-mail/perfil revogam sessões. Bloquear um proprietário recusa API/painel e pausa novos envios; um envio já em andamento pode terminar. Um reset explícito via instance/clear afeta somente a instância do token informado, limpa a fila/configurações/sessão e inicia novo pareamento.
 
 ## Validação
 
-```sh
-npm ci --ignore-scripts
-npm test
-node scripts/check-qr.mjs
-```
-
-O último comando faz um teste real de geração de QR com sessão temporária, sem parear telefone ou enviar mensagens. Os testes automáticos de isolamento, autenticação, persistência e ciclo de conexão usam transporte simulado e não provam entrega real pelo WhatsApp.
-
-Docker não estava disponível no ambiente de desenvolvimento desta entrega. O build da imagem e sua execução com volume ainda precisam ser verificados no Railway; nenhum deploy foi executado.
-
-## Desenvolvimento local
-
-Node >=24.15. Defina `ADMIN_EMAIL` e `ADMIN_PASSWORD_FILE` com uma senha de 12+ caracteres; execute `npm start`. Por padrão, o servidor fica em `127.0.0.1:3210` e guarda dados em `.data/`. `DATA_DIR` permite escolher outra pasta. Para acesso externo, `HOST=0.0.0.0` exige `PUBLIC_URL`; em produção, use HTTPS no proxy.
-
-## Áudio, imagens e armazenamento S3
-
-As variáveis já cadastradas no serviço são `S3_ENDPOINT`, `S3_BUCKET`, `S3_REGION`, `S3_ACCESS_KEY_ID` e `S3_SECRET_ACCESS_KEY`. O nome visível no Railway é Bucket_WA; `S3_BUCKET` contém o nome técnico do bucket. O endpoint usa HTTPS e o estilo virtual-host por padrão (`S3_FORCE_PATH_STYLE=true` somente se o provedor exigir path-style). Credenciais ficam no ambiente, nunca nas respostas da API. A inicialização verifica acesso ao bucket; configuração parcial ou inacessível impede a nova versão de iniciar.
-
-- `POST /instance{ID}/messages/image`: imagem JPEG, PNG ou WebP, até 20 MB; legenda opcional em `caption`.
-- `POST /instance{ID}/messages/audio`: áudio MP3, OGG, WAV, FLAC, M4A ou AAC, até 20 MB. `ptt=true` exige OGG/Opus e envia como mensagem de voz; sem isso, envia como arquivo de áudio. Não há conversão automática de codecs.
-- Autenticação: `Authorization: Bearer TOKEN`. Também aceita o campo `token` por compatibilidade.
-- Entrada: multipart com um arquivo `file` (ou `image`/`audio`) e campo `to`; alternativamente JSON/formulário com o conteúdo base64 em `image` ou `audio`. URLs remotas não são aceitas.
-- Resposta 202: arquivo salvo no S3 e mensagem enfileirada. Não confirma entrega. Consulte `messages` e ACK. Falha no upload retorna 502 sem enfileirar; S3 não configurado retorna 503.
-
-```sh
-curl -X POST 'https://SEU_DOMINIO/instanceSEU_ID/messages/image' \
-  -H 'Authorization: Bearer SEU_TOKEN' \
-  -F 'to=5511999999999' -F 'caption=Minha imagem' -F 'file=@foto.jpg'
-
-curl -X POST 'https://SEU_DOMINIO/instanceSEU_ID/messages/audio' \
-  -H 'Authorization: Bearer SEU_TOKEN' \
-  -F 'to=5511999999999' -F 'ptt=true' -F 'file=@voz.ogg'
-```
-
-Com S3 configurado, novas mídias recebidas ou enviadas pelo celular conectado também são guardadas no bucket (incluindo os tipos de mídia já recebidos anteriormente). O histórico retorna `type`, `media` e `mimetype`; abrir o histórico gera um novo link assinado válido por uma hora. Webhooks continuam usando `data.media`, agora com link assinado de leitura do arquivo, sem expor o token da instância. Os arquivos no S3 não são apagados automaticamente após 24h: somente os links expiram. Acesse o histórico novamente para renovar o link. Controle retenção e custos por política no bucket.
-
-Arquivos antigos no SQLite permanecem acessíveis pela rota legada autenticada; não são migrados automaticamente. Sem S3, o recebimento legado em SQLite continua disponível, mas o novo envio de mídia exige S3. Não inclui interface de composição/envio no painel: o painel permite abrir os anexos no histórico. Testes usam socket WhatsApp e cliente S3 simulados; entrega a telefone real depende de validação com um destinatário de teste.
+`npm ci --ignore-scripts`, `npm test`, verificações de sintaxe e healthcheck do deploy. Os testes usam sockets e serviços externos simulados, exceto a conversão local de imagem. A homologação deve incluir envio/recebimento de cada mídia, ACK e webhook do MF Rural, reinício, filas e expiração de links com destinatário de teste.

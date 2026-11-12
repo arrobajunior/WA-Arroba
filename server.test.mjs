@@ -45,7 +45,7 @@ test('token authentication, queued messages, rotation and persistence',async t=>
  assert.equal(listed.total,1);
  // sent_at (epoch seconds) is the UltraMsg-shaped field MF Rural's ack-polling fallback keys its date-window match on.
  assert.equal(typeof listed.messages[0].sent_at,'number');
- assert.ok(Math.abs(listed.messages[0].sent_at - Math.floor(Date.now()/1000)) < 10);
+ assert.equal(listed.messages[0].sent_at,0);assert.ok(Math.abs(listed.messages[0].created_at-Math.floor(Date.now()/1000))<10);assert.equal(typeof listed.messages[0].id,'number');
  await app.close();app=await start(dir);cookie=await login(app);
  const retained=(await app.request(`/api/instances/${i.id}`,{cookie})).body.instance;assert.equal(retained.token,i.token);assert.equal(retained.message_counts.queue,1);
  const rotated=(await app.request(`/api/instances/${i.id}/token`,{method:'POST',cookie,data:{}})).body.instance;
@@ -231,9 +231,51 @@ test('UltraMsg media commands use volatile relay only, preserve documents and en
  assert.equal((await send('image',{image:Buffer.from('<svg/>').toString('base64')})).status,400);
  const history=(await app.request(`/instance${i.id}/messages?status=all&limit=1&page=1&sort=asc`,{headers:{Authorization:`Bearer ${i.token}`}})).body;
  assert.equal(history.messages.length,1);assert.equal(history.total,3);assert.equal(history.messages[0].referenceId,'mf1');
- const link=history.messages[0].media.replace('http://127.0.0.1:0',app.base);
+ const panel=(await app.request(`/api/instances/${i.id}/messages`,{cookie:root})).body.messages;const attachment=panel.find(m=>m.type==='image');const link=attachment.media.replace('http://127.0.0.1:0',app.base);
  const file=await fetch(link);assert.equal(file.status,200);assert.deepEqual(Buffer.from(await file.arrayBuffer()),png);
  assert.equal((await fetch(link.replace(/media\/./,match=>match.slice(0,-1)+(match.endsWith('0')?'1':'0')))).status,404);
  const store=openStore(app.directory);try{assert.equal(store.db.prepare('SELECT count(*) AS n FROM media').get().n,0);assert.equal(store.db.prepare('SELECT count(*) AS n FROM media_objects').get().n,0);}finally{store.close();}
  assert.equal(writes,0);
+});
+
+test('UltraMsg form contracts: numeric IDs, priority, ACK dates, filters, settings and scoped management',async t=>{
+ const {createTransport}=await import('./transport.mjs'),{EventEmitter}=await import('node:events');
+ const sockets=[],sent=[];
+ const app=await fixture(t,{transportFactory:(store,opts)=>createTransport(store,{...opts,socketFactory:config=>{
+  const s={config,ev:new EventEmitter(),user:{id:'5511999999999:1@s.whatsapp.net',name:'Sender'},end(){},async logout(){},async sendMessage(jid,content,options){sent.push({jid,content,options});return {};},async profilePictureUrl(){return 'https://example.com/avatar.jpg';}};sockets.push(s);return s;
+ }})});
+ const root=await login(app),i=(await app.request('/api/instances',{method:'POST',cookie:root,data:{name:'Contract'}})).body.instance,prefix=`/instance${i.id}`;
+ const post=(action,data)=>app.request(prefix+'/'+action,{method:'POST',data:{token:i.token,...data}});
+ assert.equal((await post('instance/settings',{sendDelay:'0',sendDelayMax:'0',webhook_message_ack:'false'})).status,200);
+ assert.equal((await app.request(prefix+'/instance/settings?token='+i.token)).body.webhook_message_ack,false);
+ assert.equal((await post('instance/settings',{webhook_message_ack:'nonsense'})).status,400);
+ await app.request(`/api/instances/${i.id}/connect`,{method:'POST',cookie:root,data:{}});
+ const low=await post('messages/chat',{to:'5511888888888',body:'low',priority:10,referenceId:'low'});
+ const form=new URLSearchParams({token:i.token,to:'5511888888888@c.us',body:'high',priority:'0',referenceId:'order123'});
+ const r=await fetch(app.base+prefix+'/messages/chat',{method:'POST',body:form});const high=await r.json();assert.equal(r.status,200);assert.deepEqual(high,{sent:'true',message:'ok',id:high.id});assert.equal(typeof high.id,'number');assert.ok(high.id>low.body.id);
+ sockets[0].ev.emit('connection.update',{connection:'open'});
+ for(let n=0;n<100&&sent.length<2;n++)await new Promise(r=>setTimeout(r,10));
+ assert.equal(sent.length,2);assert.equal(sent[0].content.text,'high');assert.equal(sent[0].jid,'5511888888888@s.whatsapp.net');
+ sockets[0].ev.emit('messages.update',[{key:{id:sent[0].options.messageId,remoteJid:sent[0].jid,fromMe:true},update:{status:3}}]);
+ const history=(await app.request(prefix+'/messages?'+new URLSearchParams({token:i.token,status:'sent',id:String(high.id),referenceId:'order123',to:'+5511888888888',from:'5511999999999',ack:'device',sort:'desc',page:'1',limit:'1'}))).body;
+ assert.equal(history.total,1);assert.equal(history.pages,1);const m=history.messages[0];assert.equal(m.id,high.id);assert.equal(m.from,'5511999999999@c.us');assert.equal(m.to,'5511888888888@c.us');assert.equal(m.priority,0);assert.equal(m.ack,'device');assert.equal(typeof m.created_at,'number');assert.ok(m.sent_at>=m.created_at);assert.deepEqual(m.metadata,{});
+ assert.equal((await app.request(prefix+'/messages?token='+i.token+'&page=-1')).status,400);
+ assert.equal((await app.request(prefix+'/messages/statistics?token='+i.token)).body.sent,2);
+ assert.equal((await app.request(prefix+'/instance/me?token='+i.token)).body.name,'Sender');
+ assert.equal((await post('messages/resendById',{id:high.id})).status,200);
+ for(let n=0;n<100&&sent.length<3;n++)await new Promise(r=>setTimeout(r,10));assert.equal(sent.length,3);
+ assert.equal((await post('messages/clear',{status:'sent'})).status,200);
+ const next=(await post('messages/chat',{to:'5511888888888',body:'new'})).body;assert.ok(next.id>high.id);
+ assert.equal((await app.request(prefix+'/instance/screenshot?token='+i.token)).status,501);
+});
+
+test('temporary upload is usable by standard document command and no file bytes reach SQLite',async t=>{
+ const app=await fixture(t),root=await login(app),i=(await app.request('/api/instances',{method:'POST',cookie:root,data:{name:'Upload'}})).body.instance,prefix=`/instance${i.id}`;
+ const bytes=Buffer.from('%PDF-1.4\nprivate-document-sentinel\n%%EOF'),form=new FormData();form.set('token',i.token);form.set('file',new Blob([bytes],{type:'application/pdf'}),'contract.pdf');
+ const upload=await fetch(app.base+prefix+'/media/upload',{method:'POST',body:form});assert.equal(upload.status,200);const {url}=await upload.json();
+ const download=await fetch(url.replace('http://127.0.0.1:0',app.base));assert.deepEqual(Buffer.from(await download.arrayBuffer()),bytes);
+ const sent=await app.request(prefix+'/messages/document',{method:'POST',data:{token:i.token,to:'5511888888888',document:url,filename:'contract.pdf',referenceId:'doc'}});assert.equal(sent.status,200);assert.equal(typeof sent.body.id,'number');
+ const wal=await readFile(path.join(app.directory,'platform.sqlite-wal'));assert.equal(wal.includes(bytes),false);
+ const rotate=(await app.request(`/api/instances/${i.id}/token`,{method:'POST',cookie:root,data:{}})).body.instance;
+ assert.equal((await app.request(prefix+'/messages?token='+i.token)).status,401);assert.equal((await app.request(prefix+'/messages?token='+rotate.token)).status,200);
 });

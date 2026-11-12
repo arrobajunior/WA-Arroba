@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import QRCode from 'qrcode';
 import {createMediaRelay,MAX_MEDIA_BYTES} from './media-relay.mjs';
 import {createMediaStorage} from './media-storage.mjs';
-import {multipart,mediaInput} from './media-input.mjs';
+import {createCompatibilityApi} from './compatibility-api.mjs';
 import { createBranding } from './branding.mjs';
 import { openStore } from './store.mjs';
 import { passwordHash,passwordValid,digest,equal,sessionToken,publicUser } from './auth.mjs';
@@ -49,6 +49,7 @@ export async function createApp({dataDir=path.join(directory,'.data'),port=3210,
   const authorize=(user,row)=>{if(user.role!=='admin'&&user.id!==row.owner_id)throw fail(404,'not_found','Instância não encontrada.');};
   const counts=id=>{const result={total:0,queue:0,sent:0,unsent:0,unknown:0,sending:0};for(const r of db.prepare('SELECT status,count(*) AS n FROM messages WHERE instance_id=? GROUP BY status').all(id)){result[r.status]=r.n;result.total+=r.n;}return result;};
   const serialize=(row,secret=false)=>({id:row.id,name:row.name,phone:row.phone,owner_id:row.owner_id,owner_name:db.prepare('SELECT name FROM users WHERE id=?').get(row.owner_id)?.name,created_at:row.created_at,status:transport.state(row.id).status,error:transport.state(row.id).error,message_counts:counts(row.id),webhook_url:row.webhook_url||'',...(secret?{token:decrypt(row.token)}:{})});
+  const compatibility=createCompatibilityApi({store:{...store,equalToken:equal},transport,relay:mediaRelay,baseUrl:mediaBaseUrl,legacy,json,fail,text,keys,body,webhookUrl});
   let shuttingDown=false;
   const server=http.createServer(async(req,res)=>{
     res.setHeader('Cache-Control','no-store');res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','no-referrer');
@@ -178,44 +179,8 @@ export async function createApp({dataDir=path.join(directory,'.data'),port=3210,
         if(!entry||active!==1)throw fail(404,'media_expired','Mídia temporária indisponível. O cliente deve salvar o arquivo ao receber o webhook.');
         res.writeHead(200,{'Content-Type':entry.mimetype,'Content-Length':entry.bytes.length,'Content-Disposition':"attachment; filename*=UTF-8''"+encodeURIComponent(entry.filename),'Cache-Control':'no-store'});return res.end(entry.bytes);
       }
-      const compat=pathname.match(/^\/instance([a-f0-9]{8})\/(instance\/status|instance\/qr|instance\/qrCode|messages\/(?:chat|image|audio|voice|video|document)|messages|media\/[A-Za-z0-9_-]{1,128})$/);
-      if(compat){
-        const [,id,action]=compat;const row=db.prepare('SELECT * FROM instances WHERE id=?').get(id);const mediaSend=['messages/image','messages/audio','messages/voice','messages/video','messages/document'].includes(action);
-        const input=method==='POST'?(mediaSend&&(req.headers['content-type']||'').startsWith('multipart/form-data')?await multipart(req):await body(req,mediaSend?Math.ceil(MAX_MEDIA_BYTES*4/3)+16384:65536)):{};
-        const bearer=req.headers.authorization?.startsWith('Bearer ')?req.headers.authorization.slice(7):null;
-        const token=bearer||input.token||url.searchParams.get('token');
-        if(!row||!db.prepare('SELECT id FROM users WHERE id=? AND active=1').get(row.owner_id)||typeof token!=='string'||!equal(token,decrypt(row.token)))throw fail(401,'invalid_token','Token ou instância inválidos.');
-        if(action==='instance/status'&&method==='GET')return json(res,200,{status:{accountStatus:transport.state(id).status}});
-        if(['instance/qr','instance/qrCode'].includes(action)&&method==='GET'){const s=transport.state(id);if(action==='instance/qrCode')return json(res,200,{status:s.status,qrCode:s.qr});if(!s.qr)throw fail(409,'qr_unavailable','Gere o QR Code pelo painel.');res.writeHead(200,{'Content-Type':'image/png'});return res.end(await QRCode.toBuffer(s.qr,{width:280}));}
-        if(action==='messages'&&method==='GET')return await listMessages(res,id,url);
-        if(action.startsWith('media/')&&method==='GET'){
-          const object=db.prepare('SELECT object_key FROM media_objects WHERE instance_id=? AND message_id=?').get(id,action.slice(6));
-          if(object&&legacy()){res.writeHead(302,{'Location':await legacy().url(object.object_key),'Cache-Control':'no-store'});return res.end();}
-          const file=db.prepare('SELECT mimetype,data FROM media WHERE instance_id=? AND message_id=?').get(id,action.slice(6));
-          if(!file)throw fail(404,'not_found','Mídia não encontrada — pode já ter expirado (retida por 24h).');
-          res.writeHead(200,{'Content-Type':file.mimetype,'Content-Length':file.data.length,'Cache-Control':'private, max-age=86400'});
-          return res.end(file.data);
-        }
-        if(mediaSend&&method==='POST'){
-          const type=action.split('/')[1],field=type==='voice'?'audio':type;
-          keys(input,['token','to',field,'base64','caption','ptt','_file','filename','priority','referenceId','nocache']);
-          const recipient=text(input.to,'destino',80),caption=input.caption===undefined?'':text(input.caption,'legenda',1024,false);
-          if(!/^\+?\d{6,20}$/.test(recipient)&&!/^[0-9-]+@(c\.us|g\.us|s\.whatsapp\.net)$/.test(recipient))throw fail(400,'invalid_recipient','Use telefone internacional ou ID de grupo/contato.');
-          if(db.prepare("SELECT count(*) AS n FROM messages WHERE instance_id=? AND status IN ('queue','sending')").get(id).n>=1000)throw fail(429,'queue_full','Fila cheia.');
-          const media=await mediaInput(input,type),messageId=randomBytes(12).toString('hex'),now=new Date().toISOString();
-          const key=mediaRelay.put(id,media.bytes,media.mimetype,media.filename||'file');
-          try{db.prepare('INSERT INTO messages(id,instance_id,recipient,body,type,status,ack,created_at,media_id,reference_id,priority,filename) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)').run(messageId,id,recipient,caption,media.ptt?'ptt':type,'queue','pending',now,key,text(input.referenceId??'','referenceId',255,false),priority(input.priority),media.filename);}catch(error){mediaRelay.remove(key);throw error;}
-          transport.flush(id);return json(res,200,{id:messageId,sent:'true',message:'ok'});
-        }
-        if(action==='messages/chat'&&method==='POST'){
-          keys(input,['token','to','body','priority','referenceId']);const recipient=text(input.to,'destino',80),message=text(input.body,'mensagem',4096);
-          if(!/^\+?\d{6,20}$/.test(recipient)&&!/^[0-9-]+@(c\.us|g\.us|s\.whatsapp\.net)$/.test(recipient))throw fail(400,'invalid_recipient','Use telefone internacional ou ID de grupo/contato.');
-          if(db.prepare("SELECT count(*) AS n FROM messages WHERE instance_id=? AND status IN ('queue','sending')").get(id).n>=1000)throw fail(429,'queue_full','Fila cheia; aguarde o processamento.');
-          const messageId=randomBytes(12).toString('hex');db.prepare('INSERT INTO messages(id,instance_id,recipient,body,type,status,ack,created_at,priority,reference_id) VALUES(?,?,?,?,?,?,?,?,?,?)').run(messageId,id,recipient,message,'chat','queue','pending',new Date().toISOString(),priority(input.priority),text(input.referenceId??'','referenceId',255,false));
-          transport.flush(id);return json(res,200,{id:messageId,sent:'true',message:'ok'});
-        }
-        throw fail(405,'method_not_allowed','Método não permitido.');
-      }
+      const compat=pathname.match(/^\/instance([a-f0-9]{8})\/(.+)$/);
+      if(compat)return await compatibility(req,res,compat[1],compat[2],url);
       if(pathname.startsWith('/instance'))throw fail(404,'not_found','Endpoint não encontrado.');
       if(!['GET','HEAD'].includes(method))throw fail(405,'method_not_allowed','Método não permitido.');
       const publicDir=path.join(directory,'public');const target=path.resolve(publicDir,`.${decoded==='/'?'/index.html':decoded}`);

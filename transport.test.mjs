@@ -61,7 +61,7 @@ test('incoming message triggers UltraMsg-shaped webhook, is stored once, and ACK
  assert.equal(calls.length,1);
  assert.equal(calls[0].url,'https://example.com/hook');
  assert.equal(calls[0].body.event_type,'message_received');
- assert.deepEqual(calls[0].body.data,{id:'wamid1',from:'5511988887777@s.whatsapp.net',to:'5511999999999',fromMe:false,body:'Olá, tenho interesse',type:'chat',ack:'',time:1700000000,pushname:'Cliente Teste'});
+ assert.equal(calls[0].body.data.id,'false_5511988887777@c.us_wamid1');assert.equal(calls[0].body.data.from,'5511988887777@c.us');assert.equal(calls[0].body.data.to,'5511999999999@c.us');assert.equal(calls[0].body.data.body,'Olá, tenho interesse');assert.deepEqual(calls[0].body.data.mentionedIds,[]);assert.equal(calls[0].body.data.media,'');
  const saved=store.db.prepare("SELECT direction,status,body FROM messages WHERE provider_id='wamid1'").get();
  assert.deepEqual({...saved},{direction:'in',status:'received',body:'Olá, tenho interesse'});
  // Replaying the same history event (type 'append', as on reconnect) must not re-deliver or duplicate it.
@@ -73,7 +73,7 @@ test('incoming message triggers UltraMsg-shaped webhook, is stored once, and ACK
  s.ev.emit('messages.update',[{key:{id:'wamid2'},update:{status:3}}]);
  await tick();
  assert.equal(calls.length,2);
- assert.deepEqual(calls[1].body,{event_type:'message_ack',instanceId:'abcd1234',data:{id:'wamid2',ack:'device'}});
+ assert.deepEqual(calls[1].body,{event_type:'message_ack',instanceId:'abcd1234',data:{id:'true_5511988887777@c.us_wamid2',ack:'device'}});
 });
 
 test('incoming audio is relayed temporarily without persistence or API token exposure',async t=>{
@@ -115,10 +115,61 @@ test('outgoing image, audio, voice, video and document payloads use ephemeral by
  const kinds=[['image','image/png'],['audio','audio/mpeg'],['ptt','audio/ogg'],['video','video/mp4'],['document','application/pdf']];
  for(const [index,[type,mime]] of kinds.entries()){
   const key=relay.put('abcd1234',bytes,mime,'file.pdf');
-  store.db.prepare('INSERT INTO messages(id,instance_id,recipient,body,type,status,ack,created_at,media_id,filename) VALUES(?,?,?,?,?,?,?,?,?,?)').run(`out${index}`,'abcd1234','5511999999999','caption',type,'queue','pending',`${index}`,key,'file.pdf');
+  store.db.prepare('INSERT INTO messages(id,instance_id,recipient,body,type,status,ack,created_at,media_id,filename) VALUES(?,?,?,?,?,?,?,?,?,?)').run(`out${index}`,'abcd1234','5511999999999','caption',type,'queue','pending',new Date(Date.now()+index).toISOString(),key,'file.pdf');
  }
  transport.connect('abcd1234');sockets[0].sendMessage=async(jid,payload)=>{calls.push(payload);return {};};sockets[0].ev.emit('connection.update',{connection:'open'});
  for(let n=0;n<260&&calls.length<5;n++)await tick();
  assert.equal(calls.length,5);assert.deepEqual(calls[0].image,bytes);assert.equal(calls[1].ptt,false);assert.equal(calls[2].ptt,true);assert.deepEqual(calls[3].video,bytes);assert.deepEqual(calls[4].document,bytes);assert.equal(calls[4].fileName,'file.pdf');
  assert.equal(store.db.prepare('SELECT count(*) AS n FROM media').get().n,0);assert.equal(store.db.prepare('SELECT count(*) AS n FROM media_objects').get().n,0);
+});
+
+test('webhook flags, group documents, compound IDs and mentions follow the UltraMsg contract',async t=>{
+ const hooks=[],bytes=Buffer.from('%PDF group');let downloads=0;
+ const {store,transport,sockets}=await setup(t,{mediaBaseUrl:'https://relay.example.com',mediaDownloader:async()=>{downloads++;return bytes;}});
+ store.db.prepare('UPDATE instances SET webhook_url=?,settings=?').run('https://example.com/hook',JSON.stringify({webhook_message_received:false,webhook_message_ack:false,webhook_message_download_media:false}));
+ const realFetch=globalThis.fetch;globalThis.fetch=async(url,options)=>{hooks.push(JSON.parse(options.body));return {ok:true};};t.after(()=>{globalThis.fetch=realFetch;});
+ transport.connect('abcd1234');const socket=sockets[0];socket.ev.emit('connection.update',{connection:'open'});
+ const make=id=>({key:{id,remoteJid:'12345-67890@g.us',participant:'5511888888888@s.whatsapp.net',fromMe:false},message:{documentWithCaptionMessage:{message:{documentMessage:{fileName:'report.pdf',caption:'Report',mimetype:'application/pdf'}}}},messageTimestamp:1700000000});
+ socket.ev.emit('messages.upsert',{type:'notify',messages:[make('off')]});await tick();assert.equal(hooks.length,0);assert.equal(downloads,0);
+ store.db.prepare('UPDATE instances SET settings=?').run(JSON.stringify({webhook_message_received:true,webhook_message_ack:true,webhook_message_download_media:true}));
+ socket.ev.emit('messages.upsert',{type:'notify',messages:[make('on')]});await tick();assert.equal(hooks.length,1);assert.equal(downloads,1);
+ const event=hooks[0];assert.equal(event.data.id,'false_12345-67890@g.us_on');assert.equal(event.data.author,'5511888888888@c.us');assert.equal(event.data.type,'document');assert.equal(event.data.body,'Report');assert.ok(event.data.media.startsWith('https://relay.example.com/instanceabcd1234/media/'));assert.equal(event.referenceId,'');
+ socket.ev.emit('messages.upsert',{type:'notify',messages:[make('on')]});await tick();assert.equal(hooks.length,1);
+});
+
+test('contact, group and chat operations normalize JIDs and reject unsynchronized mutations',async t=>{
+ const {transport,sockets}=await setup(t);await assert.rejects(()=>transport.operation('abcd1234','contacts','GET',{}),/não está conectado/);
+ transport.connect('abcd1234');const s=sockets[0],actions=[];s.ev.emit('connection.update',{connection:'open'});
+ s.ev.emit('contacts.upsert',[{id:'5511888888888@s.whatsapp.net',name:'Client'}]);s.ev.emit('chats.upsert',[{id:'5511888888888@s.whatsapp.net',name:'Client',unreadCount:2}]);
+ s.onWhatsApp=async jid=>[{exists:!jid.startsWith('999'),jid}];s.updateBlockStatus=async(...args)=>actions.push(args);s.fetchBlocklist=async()=>['5511888888888@s.whatsapp.net'];
+ s.groupFetchAllParticipating=async()=>({g:{id:'123-456@g.us',subject:'Team',participants:[{id:'5511888888888@s.whatsapp.net',admin:'admin'}]}});s.groupMetadata=async()=>({id:'123-456@g.us',subject:'Team',participants:[]});s.chatModify=async(...args)=>actions.push(args);s.readMessages=async keys=>actions.push(keys);s.sendMessage=async(jid,payload)=>actions.push({jid,payload});
+ assert.deepEqual(await transport.operation('abcd1234','contacts/ids','GET',{}),['5511888888888@c.us']);
+ assert.equal((await transport.operation('abcd1234','contacts/check','GET',{chatId:'9998887777'})).status,'invalid');assert.deepEqual(await transport.operation('abcd1234','contacts/invalid','GET',{}),['9998887777@c.us']);
+ await transport.operation('abcd1234','contacts/block','POST',{chatId:'5511888888888@c.us'});assert.deepEqual(actions[0],['5511888888888@s.whatsapp.net','block']);
+ assert.deepEqual(await transport.operation('abcd1234','groups/ids','GET',{}),['123-456@g.us']);assert.equal((await transport.operation('abcd1234','groups','GET',{}))[0].participants[0].isAdmin,true);
+ await assert.rejects(()=>transport.operation('abcd1234','chats/archive','POST',{chatId:'5511888888888'}),/não sincronizada/);
+ s.ev.emit('messages.upsert',{type:'notify',messages:[{key:{id:'cached',remoteJid:'5511888888888@s.whatsapp.net',fromMe:false},message:{conversation:'hi'},messageTimestamp:1700000000}]});await tick();
+ const messages=await transport.operation('abcd1234','chats/messages','GET',{chatId:'5511888888888',limit:1});assert.equal(messages[0].id,'false_5511888888888@c.us_cached');
+ await transport.operation('abcd1234','chats/archive','POST',{chatId:'5511888888888'});assert.equal(actions.at(-1)[0].archive,true);assert.equal(actions.at(-1)[0].lastMessages[0].key.id,'cached');
+ await transport.react('abcd1234',messages[0].id,'👍');assert.equal(actions.at(-1).payload.react.key.id,'cached');
+ await transport.deleteMessage('abcd1234','true_5511888888888@c.us_outgoing');assert.equal(actions.at(-1).payload.delete.id,'outgoing');
+});
+
+test('URL media can be retried after memory loss and ACKs never downgrade',async t=>{
+ const calls=[],bytes=Buffer.from('url image');
+ const {store,transport,sockets}=await setup(t,{mediaLoader:async(input,kind)=>{assert.equal(kind,'image');assert.equal(input.image,'https://client.example/photo.png');return {bytes,mimetype:'image/png'};}});
+ store.db.prepare('INSERT INTO messages(id,instance_id,recipient,body,type,status,ack,created_at,source_url) VALUES(?,?,?,?,?,?,?,?,?)').run('urlmedia','abcd1234','5511888888888','caption','image','queue','pending',new Date().toISOString(),store.encrypt('https://client.example/photo.png'));
+ transport.connect('abcd1234');const s=sockets[0];s.sendMessage=async(jid,payload,opts)=>{calls.push(payload);s.ev.emit('messages.update',[{key:{id:opts.messageId},update:{status:4}},{key:{id:opts.messageId},update:{status:2}}]);return {};};s.ev.emit('connection.update',{connection:'open'});await tick();
+ assert.equal(calls.length,1);assert.deepEqual(calls[0].image,bytes);const m=store.db.prepare('SELECT status,ack,sent_at FROM messages WHERE id=?').get('urlmedia');assert.equal(m.status,'sent');assert.equal(m.ack,'read');assert.ok(m.sent_at>0);
+});
+
+test('instance reset clears its own state, preserves other instances and reopens QR connection',async t=>{
+ const relay=createMediaRelay(),{store,transport,sockets}=await setup(t,{mediaRelay:relay});
+ store.db.prepare('INSERT INTO instances(id,name,token,created_at,updated_at,owner_id) VALUES(?,?,?,?,?,?)').run('eeeeffff','Other',store.encrypt('other'),'now','now','owner');
+ store.db.prepare('INSERT INTO messages(id,instance_id,recipient,body,type,status,ack,created_at) VALUES(?,?,?,?,?,?,?,?)').run('owned','abcd1234','5511888888888','body','chat','sent','device','now');
+ store.db.prepare('INSERT INTO messages(id,instance_id,recipient,body,type,status,ack,created_at) VALUES(?,?,?,?,?,?,?,?)').run('other','eeeeffff','5511888888888','body','chat','sent','device','now');
+ store.db.prepare('UPDATE instances SET webhook_url=?,settings=? WHERE id=?').run('https://example.com/hook','{"sendDelay":10}','abcd1234');
+ const key=relay.put('abcd1234',Buffer.from('media'),'image/png');transport.connect('abcd1234');sockets[0].ev.emit('connection.update',{qr:'qr'});
+ await transport.reset('abcd1234');assert.equal(sockets.length,2);assert.equal(transport.state('abcd1234').status,'initialize');assert.equal(relay.get('abcd1234',key),null);
+ assert.equal(store.db.prepare('SELECT count(*) AS n FROM messages WHERE instance_id=?').get('abcd1234').n,0);assert.equal(store.db.prepare('SELECT count(*) AS n FROM messages WHERE instance_id=?').get('eeeeffff').n,1);assert.equal(store.db.prepare('SELECT webhook_url FROM instances WHERE id=?').get('abcd1234').webhook_url,'');
 });

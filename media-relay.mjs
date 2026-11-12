@@ -14,7 +14,7 @@ export function createMediaRelay({ttl=3600000,maxBytes=128*1024*1024,now=Date.no
    const key=randomBytes(24).toString('hex');entries.set(key,{instance,bytes,mimetype,filename,expires:now()+ttl});size+=bytes.length;return key;
   },
   get(instance,key){prune();const entry=entries.get(key);return entry?.instance===instance?entry:null;},
-  remove,close(){clearInterval(timer);entries.clear();size=0;},
+  remove,removeInstance(instance){for(const [key,e] of entries)if(e.instance===instance)remove(key);},close(){clearInterval(timer);entries.clear();size=0;},
   url:(base,instance,key)=>`${base}/instance${instance}/media/${key}`
  };
 }

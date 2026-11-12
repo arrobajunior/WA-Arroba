@@ -19,3 +19,10 @@ test('remote media pins public DNS and rejects private addresses, redirects and 
  const redirect=(url,options,callback)=>{const req=new EventEmitter();req.end=()=>{const res=Readable.from([]);res.statusCode=302;res.headers={location:'http://internal.example/private'};callback(res);};return req;};
  await assert.rejects(()=>fetchRemoteMedia('https://public.example/file',4,{resolve:async host=>host==='internal.example'?[{address:'10.0.0.1',family:4}]:await resolve(),request:redirect}),/público/);
 });
+
+test('BMP input is converted in memory to a WhatsApp-compatible PNG',async()=>{
+ const {mediaInput}=await import('./media-input.mjs');
+ const bmp=Buffer.alloc(58);bmp.write('BM');bmp.writeUInt32LE(58,2);bmp.writeUInt32LE(54,10);bmp.writeUInt32LE(40,14);bmp.writeInt32LE(1,18);bmp.writeInt32LE(1,22);bmp.writeUInt16LE(1,26);bmp.writeUInt16LE(24,28);bmp[54]=255;
+ const image=await mediaInput({_file:bmp},'image');assert.equal(image.mimetype,'image/png');assert.equal(image.bytes.subarray(1,4).toString(),'PNG');
+ const sticker=await mediaInput({_file:image.bytes},'sticker');assert.equal(sticker.mimetype,'image/webp');assert.equal(sticker.bytes.subarray(8,12).toString(),'WEBP');
+});

@@ -1,6 +1,7 @@
 import Busboy from 'busboy';
 import {fileTypeFromBuffer} from 'file-type';
 import sharp from 'sharp';
+import {bmpToPng} from './image-convert.mjs';
 import {MAX_MEDIA_BYTES} from './media-relay.mjs';
 import {fetchRemoteMedia} from './remote-media.mjs';
 const invalid=(message,status=400)=>Object.assign(new Error(message),{status,code:'invalid_media'});
@@ -17,7 +18,7 @@ export async function multipart(req){
 }
 export async function mediaInput(input,type,{fetchMedia=fetchRemoteMedia}={}){
  const field=type==='voice'?'audio':type,maxBytes=(type==='video'?32:type==='document'?30:16)*1024*1024;
- let bytes=input._file;
+ let bytes=input._file;if(bytes!==undefined&&!Buffer.isBuffer(bytes))throw invalid('Arquivo multipart inválido.');
  if(!bytes){
   let value=input[field]??input.base64;if(typeof value!=='string')throw invalid('Informe '+field+'.');
   if(/^https?:\/\//i.test(value))bytes=await fetchMedia(value,maxBytes);
@@ -29,12 +30,15 @@ export async function mediaInput(input,type,{fetchMedia=fetchRemoteMedia}={}){
  }
  if(!bytes.length||bytes.length>maxBytes)throw invalid('Arquivo excede o limite.',413);
  let format;try{format=await fileTypeFromBuffer(bytes);}catch{if(type!=='document')throw invalid('Arquivo inválido.');}
- const mime=format?.mime.split(';')[0];
- const allowed=type==='image'?['image/jpeg','image/png','image/webp','image/gif','image/bmp']:type==='video'?['video/mp4','video/3gpp','video/quicktime']:['audio/mpeg','audio/ogg','audio/wav','audio/x-wav','audio/flac','audio/mp4','audio/x-m4a','audio/aac'];
+ let mime=format?.mime.split(';')[0];
+ const allowed=['image','sticker'].includes(type)?['image/jpeg','image/png','image/webp','image/gif','image/bmp']:type==='video'?['video/mp4','video/3gpp','video/quicktime']:['audio/mpeg','audio/ogg','audio/wav','audio/x-wav','audio/flac','audio/mp4','audio/x-m4a','audio/aac'];
  if(type!=='document'&&(!format||!allowed.includes(mime)))throw invalid('Formato de '+type+' inválido.');
- if(type==='image'&&mime!=='image/bmp')try{await sharp(bytes,{limitInputPixels:40000000}).metadata();}catch{throw invalid('Imagem inválida ou grande demais.');}
+ if(['image','sticker'].includes(type)&&mime==='image/bmp'){try{bytes=await bmpToPng(bytes);mime='image/png';format={mime};}catch(error){throw invalid(error.message);}}
+ if(type==='image'&&mime==='image/gif'){bytes=await sharp(bytes,{limitInputPixels:40000000}).png().toBuffer();mime='image/png';format={mime};}
+ if(['image','sticker'].includes(type)&&mime!=='image/bmp')try{await sharp(bytes,{limitInputPixels:40000000}).metadata();}catch{throw invalid('Imagem inválida ou grande demais.');}
  const ptt=type==='voice'||input.ptt===true||input.ptt==='true';
- if(ptt&&(mime!=='audio/ogg'||!bytes.includes(Buffer.from('OpusHead'))))throw invalid('Mensagem de voz requer OGG/Opus.');
+ if(ptt&&(mime!=='audio/ogg'||!format?.mime.includes('codecs=opus')))throw invalid('Mensagem de voz requer OGG/Opus.');
  if(type==='document'&&(typeof input.filename!=='string'||!input.filename.trim()||input.filename.length>255||/[\r\n\/\\]/.test(input.filename)))throw invalid('filename é obrigatório (até 255 caracteres, sem caminho).');
+ if(type==='sticker'){try{bytes=await sharp(bytes,{limitInputPixels:40000000,animated:true}).resize(512,512,{fit:'contain',background:{r:0,g:0,b:0,alpha:0}}).webp().toBuffer();}catch{throw invalid('Não foi possível converter a figurinha.');}return {bytes,mimetype:'image/webp',ptt:false,filename:''};}
  return {bytes,mimetype:mime==='audio/x-m4a'?'audio/mp4':format?.mime||'application/octet-stream',ptt,filename:input.filename||''};
 }
