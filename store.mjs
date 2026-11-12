@@ -36,6 +36,14 @@ export function openStore(directory) {
   for(const [table,column,definition] of [['users','active','INTEGER NOT NULL DEFAULT 1'],['instances','owner_id','TEXT REFERENCES users(id)'],['instances','token_encrypted','INTEGER NOT NULL DEFAULT 0'],['instances','auto_connect','INTEGER NOT NULL DEFAULT 0'],['instances','webhook_url',"TEXT NOT NULL DEFAULT ''"],['messages','provider_id','TEXT'],['messages','error','TEXT'],['messages','direction',"TEXT NOT NULL DEFAULT 'out'"]]) {
     if(!columns(table).includes(column))db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   }
+  // Only the legacy master is promoted during the one-time schema migration.
+  if(!columns('users').includes('is_master')){
+    db.exec("ALTER TABLE users ADD COLUMN is_master INTEGER NOT NULL DEFAULT 0");
+    db.exec("UPDATE users SET is_master=1,active=1 WHERE id=(SELECT id FROM users WHERE role='admin' ORDER BY created_at,id LIMIT 1)");
+  }
+  db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS users_single_master ON users(is_master) WHERE is_master=1;
+    CREATE TRIGGER IF NOT EXISTS protect_master_delete BEFORE DELETE ON users WHEN OLD.is_master=1 BEGIN SELECT RAISE(ABORT,'Admin Master cannot be deleted'); END;
+    CREATE TRIGGER IF NOT EXISTS protect_master_update BEFORE UPDATE ON users WHEN OLD.is_master=1 AND (NEW.is_master<>1 OR NEW.role<>'admin' OR NEW.active<>1 OR NEW.id<>OLD.id) BEGIN SELECT RAISE(ABORT,'Admin Master is protected'); END;`);
   db.exec('CREATE INDEX IF NOT EXISTS instances_owner ON instances(owner_id); CREATE INDEX IF NOT EXISTS sessions_expiry ON sessions(expires_at);');
   db.exec(`CREATE TABLE IF NOT EXISTS branding(id INTEGER PRIMARY KEY CHECK(id=1),name TEXT NOT NULL);
     INSERT OR IGNORE INTO branding VALUES(1,'WhatsApp API');

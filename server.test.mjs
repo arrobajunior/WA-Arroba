@@ -90,7 +90,7 @@ test('Admin Master manages access, revokes sessions, blocks instance API and pro
  const i=(await app.request('/api/instances',{method:'POST',cookie:member,data:{name:'Sales'}})).body.instance;
  const edit=data=>app.request(`/api/users/${u.id}`,{method:'PATCH',cookie:root,data});
  assert.equal((await app.request(`/api/users/${u.id}`,{method:'PATCH',cookie:member,data:{active:false}})).status,403);
- assert.equal((await edit({active:false,role:'admin'})).status,400);
+ assert.equal((await edit({active:false,role:'invalid'})).status,400);
  assert.equal((await edit({active:false})).status,200);
  assert.equal((await app.request('/api/auth/me',{cookie:member})).status,401);
  assert.equal((await app.request('/api/auth/login',{method:'POST',data:credentials})).status,401);
@@ -163,4 +163,52 @@ test('downloaded media is served at the UltraMsg-compatible /media route, gated 
  assert.equal(Buffer.from(await ok.arrayBuffer()).toString(),'fake-audio-bytes');
  assert.equal((await fetch(`${app.base}/instance${i.id}/media/audio1?token=wrong`)).status,401);
  assert.equal((await fetch(`${app.base}/instance${i.id}/media/does-not-exist?token=${got.token}`)).status,404);
+});
+
+test('ADMIN shares instances, creates accounts and cannot take over the protected Master',async t=>{
+ const app=await fixture(t),root=await login(app);
+ const master=(await app.request('/api/auth/me',{cookie:root})).body.user;
+ assert.equal(master.is_master,true);
+ const create=async(name,role,cookie=root)=>{
+  const credentials={email:`${name}@example.com`,password:`${name}-long-password`};
+  const result=await app.request('/api/users',{method:'POST',cookie,data:{name,role,...credentials}});
+  assert.equal(result.status,201);return {...result.body.user,cookie:await login(app,credentials),credentials};
+ };
+ const operator=await create('operator','admin'),member=await create('member','user');
+ assert.equal(operator.is_master,false);
+ const instance=(await app.request('/api/instances',{method:'POST',cookie:member.cookie,data:{name:'Member instance'}})).body.instance;
+ assert.equal((await app.request('/api/instances',{cookie:operator.cookie})).body.instances[0].id,instance.id);
+ assert.equal((await app.request('/api/dashboard',{cookie:operator.cookie})).body.counts.instances,1);
+ assert.equal((await app.request(`/api/instances/${instance.id}`,{cookie:operator.cookie})).status,200);
+ const other=await create('otheradmin','admin',operator.cookie);
+ assert.equal(other.role,'admin');
+ for(const role of ['admin','user'])assert.equal((await app.request('/api/users',{method:'POST',cookie:member.cookie,data:{name:'No',email:'no@example.com',password:'no-long-password',role}})).status,403);
+ for(const data of [{active:false},{role:'user'},{password:'takeover-long-password'},{email:'takeover@example.com'}])assert.equal((await app.request(`/api/users/${master.id}`,{method:'PATCH',cookie:operator.cookie,data})).status,403);
+ for(const data of [{active:false},{role:'user'}])assert.equal((await app.request(`/api/users/${master.id}`,{method:'PATCH',cookie:root,data})).status,400);
+ assert.equal((await app.request('/api/branding',{method:'PATCH',cookie:operator.cookie,data:{name:'No'}})).status,403);
+ assert.equal((await app.request(`/api/users/${other.id}`,{method:'PATCH',cookie:root,data:{role:'user'}})).status,200);
+ assert.equal((await app.request('/api/auth/me',{cookie:other.cookie})).status,401);
+ const downgraded=await login(app,other.credentials);
+ assert.equal((await app.request('/api/instances',{cookie:downgraded})).body.instances.length,0);
+ const store=openStore(app.directory);
+ try{
+  assert.throws(()=>store.db.prepare('DELETE FROM users WHERE id=?').run(master.id),/cannot be deleted/);
+  assert.throws(()=>store.db.prepare("UPDATE users SET role='user' WHERE id=?").run(master.id),/protected/);
+  assert.throws(()=>store.db.prepare('UPDATE users SET active=0 WHERE id=?').run(master.id),/protected/);
+ }finally{store.close();}
+});
+
+test('legacy database preserves its original Master and existing USER accounts on migration',async t=>{
+ const {DatabaseSync}=await import('node:sqlite');
+ const dir=await mkdtemp(path.join(tmpdir(),'wa-legacy-'));t.after(()=>rm(dir,{recursive:true,force:true}));
+ const db=new DatabaseSync(path.join(dir,'platform.sqlite'));
+ db.exec("CREATE TABLE users(id TEXT PRIMARY KEY,name TEXT NOT NULL,email TEXT NOT NULL UNIQUE,password_hash TEXT NOT NULL,role TEXT NOT NULL,created_at TEXT NOT NULL,active INTEGER NOT NULL DEFAULT 1)");
+ db.prepare('INSERT INTO users VALUES(?,?,?,?,?,?,?)').run('original','Master','original@example.com','unused','admin','2025',1);
+ db.prepare('INSERT INTO users VALUES(?,?,?,?,?,?,?)').run('member','User','member@example.com','unused','user','2026',1);db.close();
+ for(let i=0;i<2;i++){
+  const store=openStore(dir);
+  assert.equal(store.db.prepare('SELECT is_master FROM users WHERE id=?').get('original').is_master,1);
+  assert.equal(store.db.prepare('SELECT role,is_master FROM users WHERE id=?').get('member').is_master,0);
+  store.close();
+ }
 });
