@@ -212,3 +212,27 @@ test('legacy database preserves its original Master and existing USER accounts o
   store.close();
  }
 });
+
+test('image/audio API persists to S3 before enqueue, validates files, and isolates media access',async t=>{
+ const objects=new Map(),uploads=[];
+ const storage={async put(key,bytes,mime){objects.set(key,Buffer.from(bytes));uploads.push({key,mime});},async get(key){return objects.get(key);},async url(key){return `https://bucket.example/${key}?signed=yes`;}};
+ const app=await fixture(t,{mediaStorage:storage}),root=await login(app);
+ const i=(await app.request('/api/instances',{method:'POST',cookie:root,data:{name:'S3'}})).body.instance;
+ const sharp=(await import('sharp')).default,png=await sharp({create:{width:8,height:8,channels:3,background:'#fff'}}).png().toBuffer();
+ const send=(action,data,token=i.token)=>app.request(`/instance${i.id}/messages/${action}`,{method:'POST',headers:{Authorization:`Bearer ${token}`},data:{to:'5511999999999',...data}});
+ assert.equal((await send('image',{image:png.toString('base64'),caption:'Foto'},'wrong')).status,401);assert.equal(uploads.length,0);
+ const image=await send('image',{image:png.toString('base64'),caption:'Foto'});assert.equal(image.status,202);assert.equal(uploads[0].mime,'image/png');assert.deepEqual(objects.get(uploads[0].key),png);
+ const wav=Buffer.alloc(48);wav.write('RIFF');wav.writeUInt32LE(40,4);wav.write('WAVEfmt ',8);wav.writeUInt32LE(16,16);wav.writeUInt16LE(1,20);wav.writeUInt16LE(1,22);wav.writeUInt32LE(8000,24);wav.writeUInt32LE(16000,28);wav.writeUInt16LE(2,32);wav.writeUInt16LE(16,34);wav.write('data',36);wav.writeUInt32LE(4,40);
+ assert.equal((await send('audio',{audio:wav.toString('base64')})).status,202);
+ assert.equal((await send('audio',{audio:wav.toString('base64'),ptt:true})).status,400);
+ const opus=Buffer.alloc(64);opus.write('OggS');opus.write('OpusHead',28);assert.equal((await send('audio',{audio:opus.toString('base64'),ptt:true})).status,202);
+ assert.equal((await send('image',{image:'https://internal.example/file'})).status,400);
+ assert.equal((await send('image',{image:Buffer.from('<svg/>').toString('base64')})).status,400);
+ const history=(await app.request(`/instance${i.id}/messages`,{headers:{Authorization:`Bearer ${i.token}`}})).body.messages;
+ assert.equal(history.length,3);assert.ok(history.every(m=>m.media.startsWith('https://bucket.example/')&&!m.media.includes(i.token)));
+ const response=await fetch(`${app.base}/instance${i.id}/media/${image.body.id}`,{headers:{Authorization:`Bearer ${i.token}`},redirect:'manual'});assert.equal(response.status,302);
+ const form=new FormData();form.set('to','5511999999999');form.set('file',new Blob([png],{type:'image/png'}),'photo.png');
+ assert.equal((await fetch(`${app.base}/instance${i.id}/messages/image`,{method:'POST',headers:{Authorization:`Bearer ${i.token}`},body:form})).status,202);
+ storage.put=async()=>{throw new Error('S3 down');};assert.equal((await send('image',{image:png.toString('base64')})).status,502);
+ assert.equal((await app.request(`/instance${i.id}/messages`,{headers:{Authorization:`Bearer ${i.token}`}})).body.total,4);
+});

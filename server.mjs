@@ -4,6 +4,8 @@ import { readFile, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import QRCode from 'qrcode';
+import {createMediaStorage,MAX_MEDIA_BYTES} from './media-storage.mjs';
+import {multipart,mediaInput} from './media-input.mjs';
 import { createBranding } from './branding.mjs';
 import { openStore } from './store.mjs';
 import { passwordHash,passwordValid,digest,equal,sessionToken,publicUser } from './auth.mjs';
@@ -19,9 +21,10 @@ function webhookUrl(value){if(value==null)return '';text(value,'webhook_url',204
 async function body(req,maxBytes=65536){let size=0;const chunks=[];for await(const chunk of req){size+=chunk.length;if(size>maxBytes)throw fail(413,'body_too_large','Arquivo ou corpo da requisição muito grande.');chunks.push(chunk);}const raw=Buffer.concat(chunks).toString('utf8');if(!raw)return {};const type=(req.headers['content-type']||'').split(';')[0];let parsed;if(type==='application/x-www-form-urlencoded')parsed=Object.fromEntries(new URLSearchParams(raw));else if(type==='application/json'){try{parsed=JSON.parse(raw);}catch{throw fail(400,'invalid_json','JSON inválido.');}}else throw fail(415,'unsupported_type','Use JSON ou formulário.');if(!parsed||typeof parsed!=='object'||Array.isArray(parsed))throw fail(400,'invalid_body','Envie um objeto.');return parsed;}
 const json=(res,status,data)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8'});res.end(JSON.stringify(data));};
 
-export async function createApp({dataDir=path.join(directory,'.data'),port=3210,publicUrl,adminEmail,adminPassword,transportFactory=createTransport,restoreConnections=true}={}) {
+export async function createApp({dataDir=path.join(directory,'.data'),port=3210,publicUrl,adminEmail,adminPassword,transportFactory=createTransport,restoreConnections=true,mediaStorage=createMediaStorage()}={}) {
   let publicOrigin;
   if(publicUrl){const u=new URL(publicUrl);if(!['http:','https:'].includes(u.protocol)||u.username||u.password||u.pathname!=='/'||u.search||u.hash)throw new Error('PUBLIC_URL deve conter somente protocolo e domínio.');publicOrigin=u.origin;}
+  if(mediaStorage?.ready){await mediaStorage.ready();console.log('S3: bucket acessível; armazenamento de mídia habilitado.');}
   const store=openStore(dataDir),{db,encrypt,decrypt}=store;
   const branding=createBranding(db);
   try{
@@ -34,7 +37,7 @@ export async function createApp({dataDir=path.join(directory,'.data'),port=3210,
     }
   }catch(e){store.close();throw e;}
   const mediaBaseUrl=publicOrigin||`http://127.0.0.1:${port}`;
-  const transport=transportFactory(store,{mediaBaseUrl}),attempts=new Map();
+  const transport=transportFactory(store,{mediaBaseUrl,mediaStorage}),attempts=new Map();
   const dummyHash=await passwordHash(randomBytes(32).toString('hex'));
   const secure=publicOrigin?.startsWith('https:');
   const cookie=(token,maxAge)=>`wa_session=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${secure?'; Secure':''}`;
@@ -160,24 +163,42 @@ export async function createApp({dataDir=path.join(directory,'.data'),port=3210,
           if(action==='connect'&&method==='POST'){keys(await body(req),[]);transport.connect(id);return json(res,202,{instance:serialize(row,true)});}
           if(action==='disconnect'&&method==='POST'){keys(await body(req),[]);await transport.disconnect(id);return json(res,200,{instance:serialize(lookup(id),true)});}
           if(action==='qr'&&method==='GET'){const s=transport.state(id);return json(res,200,{status:s.status,error:s.error,qr:s.qr?await QRCode.toDataURL(s.qr,{width:280,margin:2}):null});}
-          if(action==='messages'&&method==='GET')return listMessages(res,id,url);
+          if(action==='messages'&&method==='GET')return await listMessages(res,id,url);
         }
         throw fail(404,'not_found','Endpoint não encontrado.');
       }
-      const compat=pathname.match(/^\/instance([a-f0-9]{8})\/(instance\/status|instance\/qr|instance\/qrCode|messages\/chat|messages|media\/[A-Za-z0-9_-]{1,128})$/);
+      const compat=pathname.match(/^\/instance([a-f0-9]{8})\/(instance\/status|instance\/qr|instance\/qrCode|messages\/(?:chat|image|audio)|messages|media\/[A-Za-z0-9_-]{1,128})$/);
       if(compat){
-        const [,id,action]=compat;const row=db.prepare('SELECT * FROM instances WHERE id=?').get(id);const input=method==='POST'?await body(req):{};
+        const [,id,action]=compat;const row=db.prepare('SELECT * FROM instances WHERE id=?').get(id);const mediaSend=['messages/image','messages/audio'].includes(action);
+        const input=method==='POST'?(mediaSend&&(req.headers['content-type']||'').startsWith('multipart/form-data')?await multipart(req):await body(req,mediaSend?Math.ceil(MAX_MEDIA_BYTES*4/3)+16384:65536)):{};
         const bearer=req.headers.authorization?.startsWith('Bearer ')?req.headers.authorization.slice(7):null;
         const token=bearer||input.token||url.searchParams.get('token');
         if(!row||!db.prepare('SELECT id FROM users WHERE id=? AND active=1').get(row.owner_id)||typeof token!=='string'||!equal(token,decrypt(row.token)))throw fail(401,'invalid_token','Token ou instância inválidos.');
         if(action==='instance/status'&&method==='GET')return json(res,200,{status:{accountStatus:transport.state(id).status}});
         if(['instance/qr','instance/qrCode'].includes(action)&&method==='GET'){const s=transport.state(id);if(action==='instance/qrCode')return json(res,200,{status:s.status,qrCode:s.qr});if(!s.qr)throw fail(409,'qr_unavailable','Gere o QR Code pelo painel.');res.writeHead(200,{'Content-Type':'image/png'});return res.end(await QRCode.toBuffer(s.qr,{width:280}));}
-        if(action==='messages'&&method==='GET')return listMessages(res,id,url);
+        if(action==='messages'&&method==='GET')return await listMessages(res,id,url);
         if(action.startsWith('media/')&&method==='GET'){
+          const object=db.prepare('SELECT object_key FROM media_objects WHERE instance_id=? AND message_id=?').get(id,action.slice(6));
+          if(object&&mediaStorage){res.writeHead(302,{'Location':await mediaStorage.url(object.object_key),'Cache-Control':'no-store'});return res.end();}
           const file=db.prepare('SELECT mimetype,data FROM media WHERE instance_id=? AND message_id=?').get(id,action.slice(6));
           if(!file)throw fail(404,'not_found','Mídia não encontrada — pode já ter expirado (retida por 24h).');
           res.writeHead(200,{'Content-Type':file.mimetype,'Content-Length':file.data.length,'Cache-Control':'private, max-age=86400'});
           return res.end(file.data);
+        }
+        if(mediaSend&&method==='POST'){
+          if(!mediaStorage)throw fail(503,'storage_unavailable','Armazenamento S3 não configurado.');
+          const type=action.split('/')[1];keys(input,['token','to',type,'base64','caption','ptt','_file']);
+          const recipient=text(input.to,'destino',80),caption=input.caption===undefined?'':text(input.caption,'legenda',4096,false);
+          if(!/^\+?\d{6,20}$/.test(recipient)&&!/^[0-9-]+@(c\.us|g\.us|s\.whatsapp\.net)$/.test(recipient))throw fail(400,'invalid_recipient','Use telefone internacional ou ID de grupo/contato.');
+          if(db.prepare("SELECT count(*) AS n FROM messages WHERE instance_id=? AND status IN ('queue','sending')").get(id).n>=1000)throw fail(429,'queue_full','Fila cheia.');
+          const media=await mediaInput(input,type),messageId=randomBytes(12).toString('hex'),now=new Date().toISOString(),objectKey=`instances/${id}/out/${messageId}`;
+          try{await mediaStorage.put(objectKey,media.bytes,media.mimetype);}catch{throw fail(502,'storage_failed','Não foi possível salvar o arquivo no S3. Nenhuma mensagem foi enfileirada.');}
+          db.exec('BEGIN');try{
+            db.prepare('INSERT INTO media_objects VALUES(?,?,?,?,?,?)').run(id,messageId,objectKey,media.mimetype,media.bytes.length,now);
+            db.prepare('INSERT INTO messages(id,instance_id,recipient,body,type,status,ack,created_at,media_id) VALUES(?,?,?,?,?,?,?,?,?)').run(messageId,id,recipient,caption,media.ptt?'ptt':type,'queue','pending',now,messageId);
+            db.exec('COMMIT');
+          }catch(error){db.exec('ROLLBACK');throw error;}
+          transport.flush(id);return json(res,202,{id:messageId,status:'queue',sent:false,type:media.ptt?'ptt':type,message:'Arquivo salvo no S3 e aceito para envio.'});
         }
         if(action==='messages/chat'&&method==='POST'){
           keys(input,['token','to','body']);const recipient=text(input.to,'destino',80),message=text(input.body,'mensagem',4096);
@@ -197,22 +218,26 @@ export async function createApp({dataDir=path.join(directory,'.data'),port=3210,
       const data=await readFile(resolved);res.writeHead(200,{'Content-Type':({'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.js':'text/javascript; charset=utf-8','.svg':'image/svg+xml'})[path.extname(resolved)]||'application/octet-stream'});res.end(method==='HEAD'?undefined:data);
     }catch(e){if(!res.headersSent)json(res,e.status||500,{error:e.code||'internal_error',message:e.status?e.message:'Não foi possível concluir a operação. Tente novamente.'});else res.end();}
   });
-  function listMessages(res,id,url){
+  async function listMessages(res,id,url){
     const status=url.searchParams.get('status')||'',query=url.searchParams.get('query')||'';
     text(query,'busca',4096,false);
     if(status&&!['queue','sent','sending','unsent','unknown','received'].includes(status))throw fail(400,'invalid_status','Status inválido.');
     const where="instance_id=? AND (?='' OR status=?) AND (?='' OR instr(body,?)>0 OR instr(recipient,?)>0)";
     const args=[id,status,status,query,query,query];
-    const rows=db.prepare(`SELECT id,recipient AS "to",body,status,ack,created_at,error FROM messages WHERE ${where} ORDER BY created_at DESC,id DESC LIMIT 100`).all(...args);
+    const rows=db.prepare(`SELECT id,recipient AS "to",body,type,status,ack,created_at,error,media_id,provider_id FROM messages WHERE ${where} ORDER BY created_at DESC,id DESC LIMIT 100`).all(...args);
     // sent_at (epoch em segundos) no mesmo formato que o UltraMsg devolve — é o campo
     // que o MF Rural usa para casar a confirmação de entrega com a mensagem salva.
-    const messages=rows.map(r=>({...r,sent_at:Math.floor(new Date(r.created_at).getTime()/1000)}));
+    const messages=await Promise.all(rows.map(async r=>{
+      const object=db.prepare('SELECT object_key,mimetype FROM media_objects WHERE instance_id=? AND message_id=?').get(id,r.media_id||r.provider_id);
+      const {media_id,provider_id,...item}=r;
+      return {...item,sent_at:Math.floor(new Date(r.created_at).getTime()/1000),...(object&&mediaStorage?{media:await mediaStorage.url(object.object_key),mimetype:object.mimetype}:{})};
+    }));
     const total=db.prepare(`SELECT count(*) AS n FROM messages WHERE ${where}`).get(...args).n;
     return json(res,200,{messages,total,limit:100});
   }
   server.requestTimeout=30000;server.headersTimeout=15000;
   let stop;
-  server.shutdown=()=>stop||=(async()=>{shuttingDown=true;const drained=new Promise(resolve=>server.close(resolve));server.closeIdleConnections();await drained;await transport.close();store.close();})();
+  server.shutdown=()=>stop||=(async()=>{shuttingDown=true;const drained=new Promise(resolve=>server.close(resolve));server.closeIdleConnections();await drained;await transport.close();mediaStorage?.close?.();store.close();})();
   if(restoreConnections)transport.restore();
   return server;
 }

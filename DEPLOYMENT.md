@@ -15,7 +15,7 @@
 - API para status, QR, envio de texto e consulta dos envios. Fila persistente; retorno 202 significa aceito, não entregue. O ACK indica confirmação de servidor/dispositivo/leitura.
 - Em falhas de envio ambíguas, a mensagem fica `unknown` e não é reenviada automaticamente, evitando duplicação silenciosa.
 
-Não inclui cobrança, plano comercial, bots, envio de mídia, webhooks, recuperação de senha por e-mail, exclusão de usuários ou paridade completa com a UltraMsg. O histórico cobre envios desta API. A validação de pareamento e entrega com um número real ainda depende do operador.
+Não inclui cobrança, plano comercial, bots, recuperação de senha por e-mail, exclusão de usuários ou paridade completa com a UltraMsg. O histórico cobre envios desta API. A validação de pareamento e entrega com um número real ainda depende do operador.
 
 ## Railway: configuração inicial
 
@@ -111,3 +111,27 @@ Docker não estava disponível no ambiente de desenvolvimento desta entrega. O b
 ## Desenvolvimento local
 
 Node >=24.15. Defina `ADMIN_EMAIL` e `ADMIN_PASSWORD_FILE` com uma senha de 12+ caracteres; execute `npm start`. Por padrão, o servidor fica em `127.0.0.1:3210` e guarda dados em `.data/`. `DATA_DIR` permite escolher outra pasta. Para acesso externo, `HOST=0.0.0.0` exige `PUBLIC_URL`; em produção, use HTTPS no proxy.
+
+## Áudio, imagens e armazenamento S3
+
+As variáveis já cadastradas no serviço são `S3_ENDPOINT`, `S3_BUCKET`, `S3_REGION`, `S3_ACCESS_KEY_ID` e `S3_SECRET_ACCESS_KEY`. O nome visível no Railway é Bucket_WA; `S3_BUCKET` contém o nome técnico do bucket. O endpoint usa HTTPS e o estilo virtual-host por padrão (`S3_FORCE_PATH_STYLE=true` somente se o provedor exigir path-style). Credenciais ficam no ambiente, nunca nas respostas da API. A inicialização verifica acesso ao bucket; configuração parcial ou inacessível impede a nova versão de iniciar.
+
+- `POST /instance{ID}/messages/image`: imagem JPEG, PNG ou WebP, até 20 MB; legenda opcional em `caption`.
+- `POST /instance{ID}/messages/audio`: áudio MP3, OGG, WAV, FLAC, M4A ou AAC, até 20 MB. `ptt=true` exige OGG/Opus e envia como mensagem de voz; sem isso, envia como arquivo de áudio. Não há conversão automática de codecs.
+- Autenticação: `Authorization: Bearer TOKEN`. Também aceita o campo `token` por compatibilidade.
+- Entrada: multipart com um arquivo `file` (ou `image`/`audio`) e campo `to`; alternativamente JSON/formulário com o conteúdo base64 em `image` ou `audio`. URLs remotas não são aceitas.
+- Resposta 202: arquivo salvo no S3 e mensagem enfileirada. Não confirma entrega. Consulte `messages` e ACK. Falha no upload retorna 502 sem enfileirar; S3 não configurado retorna 503.
+
+```sh
+curl -X POST 'https://SEU_DOMINIO/instanceSEU_ID/messages/image' \
+  -H 'Authorization: Bearer SEU_TOKEN' \
+  -F 'to=5511999999999' -F 'caption=Minha imagem' -F 'file=@foto.jpg'
+
+curl -X POST 'https://SEU_DOMINIO/instanceSEU_ID/messages/audio' \
+  -H 'Authorization: Bearer SEU_TOKEN' \
+  -F 'to=5511999999999' -F 'ptt=true' -F 'file=@voz.ogg'
+```
+
+Com S3 configurado, novas mídias recebidas ou enviadas pelo celular conectado também são guardadas no bucket (incluindo os tipos de mídia já recebidos anteriormente). O histórico retorna `type`, `media` e `mimetype`; abrir o histórico gera um novo link assinado válido por uma hora. Webhooks continuam usando `data.media`, agora com link assinado de leitura do arquivo, sem expor o token da instância. Os arquivos no S3 não são apagados automaticamente após 24h: somente os links expiram. Acesse o histórico novamente para renovar o link. Controle retenção e custos por política no bucket.
+
+Arquivos antigos no SQLite permanecem acessíveis pela rota legada autenticada; não são migrados automaticamente. Sem S3, o recebimento legado em SQLite continua disponível, mas o novo envio de mídia exige S3. Não inclui interface de composição/envio no painel: o painel permite abrir os anexos no histórico. Testes usam socket WhatsApp e cliente S3 simulados; entrega a telefone real depende de validação com um destinatário de teste.
