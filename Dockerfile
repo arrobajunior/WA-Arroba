@@ -1,11 +1,11 @@
 FROM node:24.21.0-bookworm-slim
 ENV NODE_ENV=production HOST=0.0.0.0 PORT=3210 DATA_DIR=/app/data
 WORKDIR /app
-RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates && rm -rf /var/lib/apt/lists/* \
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates ffmpeg && rm -rf /var/lib/apt/lists/* \
     && git config --system url."https://github.com/".insteadOf ssh://git@github.com/
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
-COPY --chown=node:node media-storage.mjs media-input.mjs server.mjs store.mjs auth.mjs transport.mjs branding.mjs ./
+COPY --chown=node:node media-storage.mjs media-input.mjs media-relay.mjs remote-media.mjs instance-settings.mjs image-convert.mjs compatibility-api.mjs server.mjs store.mjs auth.mjs transport.mjs branding.mjs ./
 COPY --chown=node:node public ./public
 RUN mkdir /app/data && chown node:node /app/data && chmod 700 /app/data
 USER node

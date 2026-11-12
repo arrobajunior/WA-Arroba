@@ -39,13 +39,13 @@ test('token authentication, queued messages, rotation and persistence',async t=>
  const dir=await mkdtemp(path.join(tmpdir(),'wa-persist-test-'));let app=await start(dir);t.after(async()=>{await app.close();await rm(dir,{recursive:true,force:true});});let cookie=await login(app);
  const i=(await app.request('/api/instances',{method:'POST',cookie,data:{name:'Integration'}})).body.instance;
  const route=`/instance${i.id}`;assert.equal((await app.request(route+'/instance/status?token=wrong')).status,401);
- assert.equal((await app.request(route+'/messages/chat',{method:'POST',data:{token:i.token,to:'5511999999999',body:'Order 123'}})).status,202);
+ assert.equal((await app.request(route+'/messages/chat',{method:'POST',data:{token:i.token,to:'5511999999999',body:'Order 123'}})).status,200);
  assert.equal((await app.request(route+'/instance/status',{headers:{Authorization:`Bearer ${i.token}`}})).body.status.accountStatus,'disconnected');
  const listed=(await app.request(route+'/messages',{headers:{Authorization:`Bearer ${i.token}`}})).body;
  assert.equal(listed.total,1);
  // sent_at (epoch seconds) is the UltraMsg-shaped field MF Rural's ack-polling fallback keys its date-window match on.
  assert.equal(typeof listed.messages[0].sent_at,'number');
- assert.ok(Math.abs(listed.messages[0].sent_at - Math.floor(Date.now()/1000)) < 10);
+ assert.equal(listed.messages[0].sent_at,0);assert.ok(Math.abs(listed.messages[0].created_at-Math.floor(Date.now()/1000))<10);assert.equal(typeof listed.messages[0].id,'number');
  await app.close();app=await start(dir);cookie=await login(app);
  const retained=(await app.request(`/api/instances/${i.id}`,{cookie})).body.instance;assert.equal(retained.token,i.token);assert.equal(retained.message_counts.queue,1);
  const rotated=(await app.request(`/api/instances/${i.id}/token`,{method:'POST',cookie,data:{}})).body.instance;
@@ -213,26 +213,69 @@ test('legacy database preserves its original Master and existing USER accounts o
  }
 });
 
-test('image/audio API persists to S3 before enqueue, validates files, and isolates media access',async t=>{
- const objects=new Map(),uploads=[];
- const storage={async put(key,bytes,mime){objects.set(key,Buffer.from(bytes));uploads.push({key,mime});},async get(key){return objects.get(key);},async url(key){return `https://bucket.example/${key}?signed=yes`;}};
- const app=await fixture(t,{mediaStorage:storage}),root=await login(app);
- const i=(await app.request('/api/instances',{method:'POST',cookie:root,data:{name:'S3'}})).body.instance;
+test('UltraMsg media commands use volatile relay only, preserve documents and enforce client access',async t=>{
+ const {createMediaRelay}=await import('./media-relay.mjs');const relay=createMediaRelay();let writes=0;
+ const storage={put:async()=>{writes++;throw new Error('must not write');}};
+ const app=await fixture(t,{mediaStorage:storage,mediaRelay:relay}),root=await login(app);
+ const i=(await app.request('/api/instances',{method:'POST',cookie:root,data:{name:'Relay'}})).body.instance;
  const sharp=(await import('sharp')).default,png=await sharp({create:{width:8,height:8,channels:3,background:'#fff'}}).png().toBuffer();
  const send=(action,data,token=i.token)=>app.request(`/instance${i.id}/messages/${action}`,{method:'POST',headers:{Authorization:`Bearer ${token}`},data:{to:'5511999999999',...data}});
- assert.equal((await send('image',{image:png.toString('base64'),caption:'Foto'},'wrong')).status,401);assert.equal(uploads.length,0);
- const image=await send('image',{image:png.toString('base64'),caption:'Foto'});assert.equal(image.status,202);assert.equal(uploads[0].mime,'image/png');assert.deepEqual(objects.get(uploads[0].key),png);
- const wav=Buffer.alloc(48);wav.write('RIFF');wav.writeUInt32LE(40,4);wav.write('WAVEfmt ',8);wav.writeUInt32LE(16,16);wav.writeUInt16LE(1,20);wav.writeUInt16LE(1,22);wav.writeUInt32LE(8000,24);wav.writeUInt32LE(16000,28);wav.writeUInt16LE(2,32);wav.writeUInt16LE(16,34);wav.write('data',36);wav.writeUInt32LE(4,40);
- assert.equal((await send('audio',{audio:wav.toString('base64')})).status,202);
- assert.equal((await send('audio',{audio:wav.toString('base64'),ptt:true})).status,400);
- const opus=Buffer.alloc(64);opus.write('OggS');opus.write('OpusHead',28);assert.equal((await send('audio',{audio:opus.toString('base64'),ptt:true})).status,202);
- assert.equal((await send('image',{image:'https://internal.example/file'})).status,400);
+ assert.equal((await send('image',{image:png.toString('base64')},'wrong')).status,401);
+ const image=await send('image',{image:png.toString('base64'),caption:'Foto',priority:'1',referenceId:'mf1'});assert.equal(image.status,200);assert.deepEqual(image.body,{id:image.body.id,sent:'true',message:'ok'});
+ const opus=Buffer.alloc(64);opus.write('OggS');opus.write('OpusHead',28);
+ assert.equal((await send('voice',{audio:opus.toString('base64')})).status,200);
+ const pdf=Buffer.from('%PDF-1.4\nTest PDF\n%%EOF');
+ assert.equal((await send('document',{document:pdf.toString('base64'),filename:'test.pdf'})).status,200);
+ assert.equal((await send('document',{document:pdf.toString('base64')})).status,400);
+ assert.equal((await send('image',{image:'http://127.0.0.1/private'})).status,400);
  assert.equal((await send('image',{image:Buffer.from('<svg/>').toString('base64')})).status,400);
- const history=(await app.request(`/instance${i.id}/messages`,{headers:{Authorization:`Bearer ${i.token}`}})).body.messages;
- assert.equal(history.length,3);assert.ok(history.every(m=>m.media.startsWith('https://bucket.example/')&&!m.media.includes(i.token)));
- const response=await fetch(`${app.base}/instance${i.id}/media/${image.body.id}`,{headers:{Authorization:`Bearer ${i.token}`},redirect:'manual'});assert.equal(response.status,302);
- const form=new FormData();form.set('to','5511999999999');form.set('file',new Blob([png],{type:'image/png'}),'photo.png');
- assert.equal((await fetch(`${app.base}/instance${i.id}/messages/image`,{method:'POST',headers:{Authorization:`Bearer ${i.token}`},body:form})).status,202);
- storage.put=async()=>{throw new Error('S3 down');};assert.equal((await send('image',{image:png.toString('base64')})).status,502);
- assert.equal((await app.request(`/instance${i.id}/messages`,{headers:{Authorization:`Bearer ${i.token}`}})).body.total,4);
+ const history=(await app.request(`/instance${i.id}/messages?status=all&limit=1&page=1&sort=asc`,{headers:{Authorization:`Bearer ${i.token}`}})).body;
+ assert.equal(history.messages.length,1);assert.equal(history.total,3);assert.equal(history.messages[0].referenceId,'mf1');
+ const panel=(await app.request(`/api/instances/${i.id}/messages`,{cookie:root})).body.messages;const attachment=panel.find(m=>m.type==='image');const link=attachment.media.replace('http://127.0.0.1:0',app.base);
+ const file=await fetch(link);assert.equal(file.status,200);assert.deepEqual(Buffer.from(await file.arrayBuffer()),png);
+ assert.equal((await fetch(link.replace(/media\/./,match=>match.slice(0,-1)+(match.endsWith('0')?'1':'0')))).status,404);
+ const store=openStore(app.directory);try{assert.equal(store.db.prepare('SELECT count(*) AS n FROM media').get().n,0);assert.equal(store.db.prepare('SELECT count(*) AS n FROM media_objects').get().n,0);}finally{store.close();}
+ assert.equal(writes,0);
+});
+
+test('UltraMsg form contracts: numeric IDs, priority, ACK dates, filters, settings and scoped management',async t=>{
+ const {createTransport}=await import('./transport.mjs'),{EventEmitter}=await import('node:events');
+ const sockets=[],sent=[];
+ const app=await fixture(t,{transportFactory:(store,opts)=>createTransport(store,{...opts,socketFactory:config=>{
+  const s={config,ev:new EventEmitter(),user:{id:'5511999999999:1@s.whatsapp.net',name:'Sender'},end(){},async logout(){},async sendMessage(jid,content,options){sent.push({jid,content,options});return {};},async profilePictureUrl(){return 'https://example.com/avatar.jpg';}};sockets.push(s);return s;
+ }})});
+ const root=await login(app),i=(await app.request('/api/instances',{method:'POST',cookie:root,data:{name:'Contract'}})).body.instance,prefix=`/instance${i.id}`;
+ const post=(action,data)=>app.request(prefix+'/'+action,{method:'POST',data:{token:i.token,...data}});
+ assert.equal((await post('instance/settings',{sendDelay:'0',sendDelayMax:'0',webhook_message_ack:'false'})).status,200);
+ assert.equal((await app.request(prefix+'/instance/settings?token='+i.token)).body.webhook_message_ack,false);
+ assert.equal((await post('instance/settings',{webhook_message_ack:'nonsense'})).status,400);
+ await app.request(`/api/instances/${i.id}/connect`,{method:'POST',cookie:root,data:{}});
+ const low=await post('messages/chat',{to:'5511888888888',body:'low',priority:10,referenceId:'low'});
+ const form=new URLSearchParams({token:i.token,to:'5511888888888@c.us',body:'high',priority:'0',referenceId:'order123'});
+ const r=await fetch(app.base+prefix+'/messages/chat',{method:'POST',body:form});const high=await r.json();assert.equal(r.status,200);assert.deepEqual(high,{sent:'true',message:'ok',id:high.id});assert.equal(typeof high.id,'number');assert.ok(high.id>low.body.id);
+ sockets[0].ev.emit('connection.update',{connection:'open'});
+ for(let n=0;n<100&&sent.length<2;n++)await new Promise(r=>setTimeout(r,10));
+ assert.equal(sent.length,2);assert.equal(sent[0].content.text,'high');assert.equal(sent[0].jid,'5511888888888@s.whatsapp.net');
+ sockets[0].ev.emit('messages.update',[{key:{id:sent[0].options.messageId,remoteJid:sent[0].jid,fromMe:true},update:{status:3}}]);
+ const history=(await app.request(prefix+'/messages?'+new URLSearchParams({token:i.token,status:'sent',id:String(high.id),referenceId:'order123',to:'+5511888888888',from:'5511999999999',ack:'device',sort:'desc',page:'1',limit:'1'}))).body;
+ assert.equal(history.total,1);assert.equal(history.pages,1);const m=history.messages[0];assert.equal(m.id,high.id);assert.equal(m.from,'5511999999999@c.us');assert.equal(m.to,'5511888888888@c.us');assert.equal(m.priority,0);assert.equal(m.ack,'device');assert.equal(typeof m.created_at,'number');assert.ok(m.sent_at>=m.created_at);assert.deepEqual(m.metadata,{});
+ assert.equal((await app.request(prefix+'/messages?token='+i.token+'&page=-1')).status,400);
+ assert.equal((await app.request(prefix+'/messages/statistics?token='+i.token)).body.sent,2);
+ assert.equal((await app.request(prefix+'/instance/me?token='+i.token)).body.name,'Sender');
+ assert.equal((await post('messages/resendById',{id:high.id})).status,200);
+ for(let n=0;n<100&&sent.length<3;n++)await new Promise(r=>setTimeout(r,10));assert.equal(sent.length,3);
+ assert.equal((await post('messages/clear',{status:'sent'})).status,200);
+ const next=(await post('messages/chat',{to:'5511888888888',body:'new'})).body;assert.ok(next.id>high.id);
+ assert.equal((await app.request(prefix+'/instance/screenshot?token='+i.token)).status,501);
+});
+
+test('temporary upload is usable by standard document command and no file bytes reach SQLite',async t=>{
+ const app=await fixture(t),root=await login(app),i=(await app.request('/api/instances',{method:'POST',cookie:root,data:{name:'Upload'}})).body.instance,prefix=`/instance${i.id}`;
+ const bytes=Buffer.from('%PDF-1.4\nprivate-document-sentinel\n%%EOF'),form=new FormData();form.set('token',i.token);form.set('file',new Blob([bytes],{type:'application/pdf'}),'contract.pdf');
+ const upload=await fetch(app.base+prefix+'/media/upload',{method:'POST',body:form});assert.equal(upload.status,200);const {url}=await upload.json();
+ const download=await fetch(url.replace('http://127.0.0.1:0',app.base));assert.deepEqual(Buffer.from(await download.arrayBuffer()),bytes);
+ const sent=await app.request(prefix+'/messages/document',{method:'POST',data:{token:i.token,to:'5511888888888',document:url,filename:'contract.pdf',referenceId:'doc'}});assert.equal(sent.status,200);assert.equal(typeof sent.body.id,'number');
+ const wal=await readFile(path.join(app.directory,'platform.sqlite-wal'));assert.equal(wal.includes(bytes),false);
+ const rotate=(await app.request(`/api/instances/${i.id}/token`,{method:'POST',cookie:root,data:{}})).body.instance;
+ assert.equal((await app.request(prefix+'/messages?token='+i.token)).status,401);assert.equal((await app.request(prefix+'/messages?token='+rotate.token)).status,200);
 });

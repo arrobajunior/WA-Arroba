@@ -45,7 +45,15 @@ export function openStore(directory) {
     CREATE TRIGGER IF NOT EXISTS protect_master_delete BEFORE DELETE ON users WHEN OLD.is_master=1 BEGIN SELECT RAISE(ABORT,'Admin Master cannot be deleted'); END;
     CREATE TRIGGER IF NOT EXISTS protect_master_update BEFORE UPDATE ON users WHEN OLD.is_master=1 AND (NEW.is_master<>1 OR NEW.role<>'admin' OR NEW.active<>1 OR NEW.id<>OLD.id) BEGIN SELECT RAISE(ABORT,'Admin Master is protected'); END;`);
   db.exec(`CREATE TABLE IF NOT EXISTS media_objects(instance_id TEXT NOT NULL REFERENCES instances(id),message_id TEXT NOT NULL,object_key TEXT NOT NULL,mimetype TEXT NOT NULL,size INTEGER NOT NULL,created_at TEXT NOT NULL,PRIMARY KEY(instance_id,message_id));`);
+  for(const [name,definition] of [['priority','INTEGER NOT NULL DEFAULT 10'],['reference_id',"TEXT NOT NULL DEFAULT ''"],['filename',"TEXT NOT NULL DEFAULT ''"]])if(!columns('messages').includes(name))db.exec(`ALTER TABLE messages ADD COLUMN ${name} ${definition}`);
+
   if(!columns('messages').includes('media_id'))db.exec("ALTER TABLE messages ADD COLUMN media_id TEXT");
+
+  for(const [name,definition] of [['sent_at','INTEGER'],['queued_at','INTEGER'],['payload',"TEXT NOT NULL DEFAULT '{}'"],['source_url',"TEXT NOT NULL DEFAULT ''"]])if(!columns('messages').includes(name))db.exec(`ALTER TABLE messages ADD COLUMN ${name} ${definition}`);
+  db.prepare("UPDATE messages SET status='unsent',error='Mídia temporária expirada após reinício; reenvie o arquivo pelo cliente.' WHERE type<>'chat' AND status='queue' AND media_id IS NOT NULL AND source_url='' AND NOT EXISTS(SELECT 1 FROM media_objects WHERE media_objects.instance_id=messages.instance_id AND media_objects.message_id=messages.media_id)").run();
+  db.exec(`CREATE TABLE IF NOT EXISTS api_messages(api_id INTEGER PRIMARY KEY AUTOINCREMENT,message_id TEXT NOT NULL UNIQUE REFERENCES messages(id) ON DELETE CASCADE);
+    INSERT OR IGNORE INTO api_messages(message_id) SELECT id FROM messages WHERE NOT EXISTS(SELECT 1 FROM api_messages a WHERE a.message_id=messages.id) ORDER BY created_at,id;
+    CREATE TRIGGER IF NOT EXISTS message_api_id AFTER INSERT ON messages BEGIN INSERT INTO api_messages(message_id) VALUES(NEW.id); END;`);
   db.exec('CREATE INDEX IF NOT EXISTS instances_owner ON instances(owner_id); CREATE INDEX IF NOT EXISTS sessions_expiry ON sessions(expires_at);');
   db.exec(`CREATE TABLE IF NOT EXISTS branding(id INTEGER PRIMARY KEY CHECK(id=1),name TEXT NOT NULL);
     INSERT OR IGNORE INTO branding VALUES(1,'WhatsApp API');
