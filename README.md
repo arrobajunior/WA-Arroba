@@ -6,9 +6,12 @@ Este repositório contém somente a aplicação. A raiz é o contexto Docker e c
 
 Consulte [publicação no Railway e contratos da API](DEPLOYMENT.md).
 
-- Admin Master: criação/edição de usuários, bloqueio de acesso e redefinição de senha.
+- Admin Master: conta original protegida contra exclusão, bloqueio e rebaixamento; somente o próprio Master pode editar seus dados.
+- ADMIN: vê e gerencia todas as instâncias; cria contas USER/ADMIN e altera perfis e acessos.
+- USER: acessa apenas suas próprias instâncias.
+- Cadastro e edição em Administração permitem escolher USER ou ADMIN; identidade visual é exclusiva do Master.
 - Nome, logos positiva/negativa e favicon configuráveis no painel.
-- Isolamento de instâncias por proprietário.
+- Contas existentes continuam USER; o Master original é preservado automaticamente na migração.
 - QR e credenciais: URL, ID e token.
 - Reconexão com credenciais persistentes.
 - API de texto, status, QR e histórico dos envios.

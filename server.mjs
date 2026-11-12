@@ -25,10 +25,11 @@ export async function createApp({dataDir=path.join(directory,'.data'),port=3210,
   const store=openStore(dataDir),{db,encrypt,decrypt}=store;
   const branding=createBranding(db);
   try{
-    if(!db.prepare("SELECT id FROM users WHERE role='admin'").get()){
+    if(!db.prepare("SELECT id FROM users WHERE is_master=1").get()){
       if(!adminEmail||!adminPassword)throw new Error('Primeira execução: defina ADMIN_EMAIL e ADMIN_PASSWORD_FILE (senha de 12+ caracteres).');
       const id=randomBytes(12).toString('hex');
       db.prepare('INSERT INTO users(id,name,email,password_hash,role,created_at) VALUES(?,?,?,?,?,?)').run(id,'Administrador',email(adminEmail),await passwordHash(password(adminPassword)),'admin',new Date().toISOString());
+      db.prepare('UPDATE users SET is_master=1 WHERE id=?').run(id);
       db.prepare('UPDATE instances SET owner_id=? WHERE owner_id IS NULL').run(id);
     }
   }catch(e){store.close();throw e;}
@@ -89,17 +90,17 @@ export async function createApp({dataDir=path.join(directory,'.data'),port=3210,
         if(pathname==='/api/auth/logout'&&method==='POST'){db.prepare('DELETE FROM sessions WHERE id=?').run(digest(sessionToken(req)));res.setHeader('Set-Cookie',cookie('',0));return json(res,200,{ok:true});}
         if(pathname==='/api/users') {
           if(session.role!=='admin')throw fail(403,'forbidden','Acesso administrativo necessário.');
-          if(method==='GET')return json(res,200,{users:db.prepare('SELECT id,name,email,role,created_at,active FROM users ORDER BY created_at').all()});
+          if(method==='GET')return json(res,200,{users:db.prepare('SELECT id,name,email,role,created_at,active,is_master FROM users ORDER BY created_at').all()});
           if(method==='POST'){
-            const input=await body(req);keys(input,['name','email','password']);const name=text(input.name,'nome',120).trim(),mail=email(input.email),pass=password(input.password);
+            const input=await body(req);keys(input,['name','email','password','role']);const role=input.role??'user';if(!['user','admin'].includes(role))throw fail(400,'invalid_role','Perfil inválido.');const name=text(input.name,'nome',120).trim(),mail=email(input.email),pass=password(input.password);
             if(db.prepare('SELECT id FROM users WHERE email=?').get(mail))throw fail(409,'email_exists','E-mail já cadastrado.');
             const hash=await passwordHash(pass),id=randomBytes(12).toString('hex');
-            try{db.prepare('INSERT INTO users(id,name,email,password_hash,role,created_at) VALUES(?,?,?,?,?,?)').run(id,name,mail,hash,'user',new Date().toISOString());}catch(e){if(db.prepare('SELECT id FROM users WHERE email=?').get(mail))throw fail(409,'email_exists','E-mail já cadastrado.');throw e;}
+            try{db.prepare('INSERT INTO users(id,name,email,password_hash,role,created_at) VALUES(?,?,?,?,?,?)').run(id,name,mail,hash,role,new Date().toISOString());}catch(e){if(db.prepare('SELECT id FROM users WHERE email=?').get(mail))throw fail(409,'email_exists','E-mail já cadastrado.');throw e;}
             return json(res,201,{user:publicUser(db.prepare('SELECT * FROM users WHERE id=?').get(id))});
           }
         }
         if(pathname==='/api/branding'&&method==='PATCH'){
-          if(session.role!=='admin')throw fail(403,'forbidden','Somente o Admin Master pode alterar a identidade visual.');
+          if(!session.is_master)throw fail(403,'forbidden','Somente o Admin Master pode alterar a identidade visual.');
           return json(res,200,{branding:await branding.update(await body(req,4500000))});
         }
         const userMatch=pathname.match(/^\/api\/users\/([a-f0-9]{24})$/);
@@ -107,17 +108,20 @@ export async function createApp({dataDir=path.join(directory,'.data'),port=3210,
           if(session.role!=='admin')throw fail(403,'forbidden','Acesso Admin Master necessário.');
           const target=db.prepare('SELECT * FROM users WHERE id=?').get(userMatch[1]);
           if(!target)throw fail(404,'not_found','Usuário não encontrado.');
-          const input=await body(req);keys(input,['name','email','password','active']);
+          if(target.is_master&&session.id!==target.id)throw fail(403,'master_protected','Somente o próprio Admin Master pode editar sua conta.');
+          const input=await body(req);keys(input,['name','email','password','active','role']);
+          const role=input.role??target.role;
+          if(!['user','admin'].includes(role))throw fail(400,'invalid_role','Perfil inválido.');
           if(input.active!==undefined&&typeof input.active!=='boolean')throw fail(400,'invalid_field','Status inválido.');
-          if(target.role==='admin'&&input.active===false)throw fail(400,'master_protected','O acesso do Admin Master não pode ser bloqueado.');
+          if(target.is_master&&(input.active===false||role!=='admin'))throw fail(400,'master_protected','O acesso do Admin Master não pode ser bloqueado.');
           const name=input.name===undefined?target.name:text(input.name,'nome',120).trim();
           const mail=input.email===undefined?target.email:email(input.email);
           const hash=input.password===undefined?target.password_hash:await passwordHash(password(input.password));
           const active=input.active===undefined?target.active:Number(input.active);
           if(db.prepare('SELECT id FROM users WHERE email=? AND id<>?').get(mail,target.id))throw fail(409,'email_exists','E-mail já cadastrado.');
           db.exec('BEGIN');try{
-            db.prepare('UPDATE users SET name=?,email=?,password_hash=?,active=? WHERE id=?').run(name,mail,hash,active,target.id);
-            if(!active||input.password!==undefined||mail!==target.email)db.prepare('DELETE FROM sessions WHERE user_id=?').run(target.id);
+            db.prepare('UPDATE users SET name=?,email=?,password_hash=?,active=?,role=? WHERE id=?').run(name,mail,hash,active,role,target.id);
+            if(!active||input.password!==undefined||mail!==target.email||role!==target.role)db.prepare('DELETE FROM sessions WHERE user_id=?').run(target.id);
             db.exec('COMMIT');
           }catch(e){db.exec('ROLLBACK');throw e;}
           if(active)for(const row of db.prepare('SELECT id FROM instances WHERE owner_id=?').all(target.id))transport.flush(row.id);

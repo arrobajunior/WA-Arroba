@@ -3,9 +3,11 @@
 ## O que esta versão faz
 
 - Admin Master entra com e-mail e senha, cria/edita usuários, bloqueia acessos, redefine senhas e vê todas as instâncias.
-- Admin Master personaliza nome, logos positiva/negativa e favicon em **Admin Master → Identidade visual**. Imagens PNG/JPG/WebP até 1 MB são convertidas para PNG estático e salvas no banco.
+- Admin Master personaliza nome, logos positiva/negativa e favicon em **Administração → Identidade visual**. Imagens PNG/JPG/WebP até 1 MB são convertidas para PNG estático e salvas no banco.
 - O bloqueio revoga sessões do painel, recusa a API do usuário e pausa novos envios da fila. Envios já em andamento podem terminar; sessões WhatsApp e dados são preservados. Reativar retoma a fila quando a conexão está ativa.
-- Usuários entram com e-mail e senha e só gerenciam suas próprias instâncias.
+- USER entra com e-mail e senha e só gerencia suas próprias instâncias. ADMIN vê e gerencia todas as instâncias e pode criar/editar contas USER e ADMIN.
+- Em Administração, escolha o perfil no cadastro ou em Gerenciar acesso. Contas existentes continuam USER até promoção explícita. Mudanças de perfil encerram as sessões da conta.
+- O Master original é identificado na migração e protegido contra exclusão, bloqueio e rebaixamento, inclusive por triggers no banco. Outros ADMINs não podem alterar seus dados; identidade visual permanece exclusiva do Master. Não há endpoint de exclusão de contas.
 - Cada instância tem nome, URL da API, ID, token e conexão por QR Code.
 - Baileys 6.7.24 conecta ao WhatsApp Web. Não depende da UltraMsg nem usa sua API. Não é a API oficial da Meta.
 - Sessões e chaves do WhatsApp são armazenadas em SQLite, com criptografia AES-256-GCM. Senhas usam scrypt e sessões administrativas expiram em 12 horas.
@@ -39,12 +41,12 @@ A imagem usa o usuário `node` por padrão. O override `RAILWAY_RUN_UID=0` segue
 
 4. Configure **uma réplica**, desligue **Serverless / sleep** e defina Healthcheck Path como `/api/health`, timeout de 60 segundos e reinício em falha. A aplicação precisa manter as conexões WhatsApp abertas. Ela respeita `PORT` e aceita o host do healthcheck do Railway nesse endpoint público.
 5. Gere o domínio Railway (ou adicione seu domínio), porta de destino 3210, e ajuste `PUBLIC_URL` ao endereço HTTPS exato. HTTPS é terminado no Railway; Caddy não é necessário.
-6. Revise as mudanças pendentes, publique e aguarde o healthcheck. Faça login, abra **Admin Master**, personalize a marca e crie os usuários. Cada usuário pode criar a instância e ler seu QR em WhatsApp → Dispositivos conectados → Conectar dispositivo.
+6. Revise as mudanças pendentes, publique e aguarde o healthcheck. Faça login, abra **Administração**, personalize a marca e crie os usuários. Cada usuário pode criar a instância e ler seu QR em WhatsApp → Dispositivos conectados → Conectar dispositivo.
 7. Valide pareamento, envio e ACK com um número de teste antes de usar a integração real. Reinicie o serviço e confirme que dados e sessão persistiram.
 
 Após a configuração inicial, pushes na branch conectada poderão disparar novos deploys. O volume precisa permanecer anexado ao mesmo serviço. Não use múltiplas réplicas: o banco e as conexões desta versão pertencem a um único processo. A capacidade por RAM/CPU ainda não foi medida. Limites iniciais: 50 instâncias por usuário, 1.000 mensagens pendentes por instância.
 
-A senha de bootstrap só cria a conta quando não há administrador. Alterar `ADMIN_PASSWORD` depois não muda uma senha existente: use **Admin Master → Gerenciar acesso**. Após validar o primeiro acesso, o segredo de bootstrap pode ser removido; preserve o banco. A instalação de um banco novo sem credenciais iniciais falha explicitamente.
+A senha de bootstrap só cria a conta quando não há administrador. Alterar `ADMIN_PASSWORD` depois não muda uma senha existente: use **Administração → Gerenciar acesso**. Após validar o primeiro acesso, o segredo de bootstrap pode ser removido; preserve o banco. A instalação de um banco novo sem credenciais iniciais falha explicitamente.
 
 Não foi adicionado `railway.json`: a documentação consultada informa que novos serviços devem usar configurações do painel/API ou IaC, e que Config as Code legado foi descontinuado. O Dockerfile permanece o contrato de build. [Documentação Railway](https://docs.railway.com/infrastructure-as-code).
 
