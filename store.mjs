@@ -44,6 +44,8 @@ export function openStore(directory) {
   db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS users_single_master ON users(is_master) WHERE is_master=1;
     CREATE TRIGGER IF NOT EXISTS protect_master_delete BEFORE DELETE ON users WHEN OLD.is_master=1 BEGIN SELECT RAISE(ABORT,'Admin Master cannot be deleted'); END;
     CREATE TRIGGER IF NOT EXISTS protect_master_update BEFORE UPDATE ON users WHEN OLD.is_master=1 AND (NEW.is_master<>1 OR NEW.role<>'admin' OR NEW.active<>1 OR NEW.id<>OLD.id) BEGIN SELECT RAISE(ABORT,'Admin Master is protected'); END;`);
+  db.exec(`CREATE TABLE IF NOT EXISTS media_objects(instance_id TEXT NOT NULL REFERENCES instances(id),message_id TEXT NOT NULL,object_key TEXT NOT NULL,mimetype TEXT NOT NULL,size INTEGER NOT NULL,created_at TEXT NOT NULL,PRIMARY KEY(instance_id,message_id));`);
+  if(!columns('messages').includes('media_id'))db.exec("ALTER TABLE messages ADD COLUMN media_id TEXT");
   db.exec('CREATE INDEX IF NOT EXISTS instances_owner ON instances(owner_id); CREATE INDEX IF NOT EXISTS sessions_expiry ON sessions(expires_at);');
   db.exec(`CREATE TABLE IF NOT EXISTS branding(id INTEGER PRIMARY KEY CHECK(id=1),name TEXT NOT NULL);
     INSERT OR IGNORE INTO branding VALUES(1,'WhatsApp API');

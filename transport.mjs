@@ -46,13 +46,21 @@ function describeMessage(msg) {
 const MEDIA_TTL_MS=24*60*60*1000;
 const MAX_MEDIA_BYTES=20*1024*1024;
 
-export function createTransport(store, { socketFactory=makeWASocket, retryDelay=2000, mediaBaseUrl, mediaDownloader=downloadMediaMessage }={}) {
+export function createTransport(store, { socketFactory=makeWASocket, retryDelay=2000, mediaBaseUrl, mediaDownloader=downloadMediaMessage, mediaStorage }={}) {
   const {db,encrypt,decrypt}=store, entries=new Map(), work=new Map();
   let closed=false;
   const webhookFor=id=>db.prepare('SELECT webhook_url FROM instances WHERE id=?').get(id)?.webhook_url||'';
   async function downloadAndStoreMedia(id,msg,mimetype,socket) {
     const buffer=await mediaDownloader(msg,'buffer',{},{logger:silentLogger,reuploadRequest:socket.updateMediaMessage});
     if(buffer.length>MAX_MEDIA_BYTES)return false;
+    if(mediaStorage){
+      const existing=db.prepare('SELECT object_key FROM media_objects WHERE instance_id=? AND message_id=?').get(id,msg.key.id);
+      if(existing)return existing.object_key;
+      const key=`instances/${id}/${msg.key.fromMe?'out':'in'}/${randomBytes(16).toString('hex')}`;
+      await mediaStorage.put(key,buffer,mimetype);
+      db.prepare('INSERT INTO media_objects VALUES(?,?,?,?,?,?)').run(id,msg.key.id,key,mimetype,buffer.length,new Date().toISOString());
+      return key;
+    }
     db.prepare('DELETE FROM media WHERE created_at<?').run(new Date(Date.now()-MEDIA_TTL_MS).toISOString());
     db.prepare('INSERT OR REPLACE INTO media(instance_id,message_id,mimetype,data,created_at) VALUES(?,?,?,?,?)').run(id,msg.key.id,mimetype,buffer,new Date().toISOString());
     return true;
@@ -124,11 +132,17 @@ export function createTransport(store, { socketFactory=makeWASocket, retryDelay=
             .run(randomBytes(12).toString('hex'),id,jid,desc.body,desc.type,fromMe?'sent':'received','device',new Date(ts*1000).toISOString(),msg.key.id,fromMe?'out':'in');
         }
         let media=null;
-        if(desc.mimetype&&mediaBaseUrl) {
+        if(desc.mimetype&&(mediaBaseUrl||mediaStorage)) {
           try {
-            if(await downloadAndStoreMedia(id,msg,desc.mimetype,e.socket)&&valid()) {
+            const outgoing=db.prepare('SELECT media_id FROM messages WHERE instance_id=? AND provider_id=?').get(id,msg.key.id);
+            const saved=outgoing?.media_id?db.prepare('SELECT object_key FROM media_objects WHERE instance_id=? AND message_id=?').get(id,outgoing.media_id):null;
+            const stored=saved?.object_key||await downloadAndStoreMedia(id,msg,desc.mimetype,e.socket);
+            if(stored&&valid()) {
+              if(mediaStorage)media=await mediaStorage.url(stored);
+              else{
               const token=decrypt(db.prepare('SELECT token FROM instances WHERE id=?').get(id).token);
               media=`${mediaBaseUrl}/instance${id}/media/${encodeURIComponent(msg.key.id)}?token=${token}`;
+              }
             }
           } catch(err) { console.error(`[media] falha ao baixar mídia ${msg.key.id}: ${err.message}`); }
         }
@@ -154,7 +168,17 @@ export function createTransport(store, { socketFactory=makeWASocket, retryDelay=
         db.prepare("UPDATE messages SET status='sending',provider_id=? WHERE id=? AND status='queue'").run(providerId,row.id);
         const jid=row.recipient.includes('@')?row.recipient.replace('@c.us','@s.whatsapp.net'):`${row.recipient.replace(/^\+/,'')}@s.whatsapp.net`;
         try {
-          await e.socket.sendMessage(jid,{text:row.body},{messageId:providerId});
+          let content={text:row.body};
+          if(row.type!=='chat'){
+            const object=db.prepare('SELECT * FROM media_objects WHERE instance_id=? AND message_id=?').get(id,row.media_id);
+            if(!object||!mediaStorage)throw new Error('Mídia indisponível.');
+            // Storage failures happen before WhatsApp is called and are safe to classify as unsent.
+            let bytes;try{bytes=await mediaStorage.get(object.object_key);}catch{
+              db.prepare("UPDATE messages SET status='unsent',error='Falha ao ler arquivo do S3; mensagem não enviada.' WHERE id=? AND status='sending'").run(row.id);continue;
+            }
+            content=row.type==='image'?{image:bytes,caption:row.body,mimetype:object.mimetype}:{audio:bytes,mimetype:object.mimetype,ptt:row.type==='ptt'};
+          }
+          await e.socket.sendMessage(jid,content,{messageId:providerId});
           // A successful send call alone is not delivery confirmation. Preserve any ACK received during the call.
           if(!closed)db.prepare("UPDATE messages SET status='sent' WHERE id=? AND status='sending'").run(row.id);
         }catch{

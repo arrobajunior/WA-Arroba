@@ -124,3 +124,30 @@ test('webhook delivery retries on transient failure before giving up',async t=>{
  console.error=realError;
  assert.equal(attempts,3);assert.equal(gaveUp,true);
 });
+
+test('outgoing image/audio queue reads S3 and preserves WhatsApp payload types',async t=>{
+ const bytes=Buffer.from('media bytes'),calls=[];
+ const mediaStorage={get:async()=>bytes,url:async key=>`https://private.example/${key}?signed=yes`};
+ const {store,transport,sockets}=await setup(t,{mediaStorage});
+ for(const [index,type,mime] of [[0,'image','image/png'],[1,'audio','audio/mpeg'],[2,'ptt','audio/ogg']]){
+  const id=`out${index}`;store.db.prepare('INSERT INTO media_objects VALUES(?,?,?,?,?,?)').run('abcd1234',id,id,mime,bytes.length,'now');
+  store.db.prepare('INSERT INTO messages(id,instance_id,recipient,body,type,status,ack,created_at,media_id) VALUES(?,?,?,?,?,?,?,?,?)').run(id,'abcd1234','5511999999999','caption',type,'queue','pending',`${index}`,id);
+ }
+ transport.connect('abcd1234');sockets[0].sendMessage=async(jid,payload)=>{calls.push(payload);return {};};sockets[0].ev.emit('connection.update',{connection:'open'});
+ for(let n=0;n<150&&calls.length<3;n++)await tick();
+ assert.equal(calls.length,3);assert.deepEqual(calls[0].image,bytes);assert.equal(calls[0].caption,'caption');assert.deepEqual(calls[1].audio,bytes);assert.equal(calls[1].ptt,false);assert.equal(calls[2].ptt,true);
+});
+
+test('received and phone-sent attachments persist privately in S3 with signed webhook URLs',async t=>{
+ const puts=[],payloads=[],bytes=Buffer.from('downloaded media');
+ const storage={async put(key,data,mime){puts.push({key,data,mime});},url:async key=>`https://bucket.example/${key}?signed=yes`};
+ const realFetch=globalThis.fetch;globalThis.fetch=async(url,options)=>{payloads.push(JSON.parse(options.body));return {ok:true};};t.after(()=>{globalThis.fetch=realFetch;});
+ const {store,transport,sockets}=await setup(t,{mediaStorage:storage,mediaDownloader:async()=>bytes});
+ store.db.prepare('UPDATE instances SET webhook_url=?').run('https://example.com/hook');transport.connect('abcd1234');sockets[0].ev.emit('connection.update',{connection:'open'});
+ for(const [id,fromMe,message] of [['received',false,{audioMessage:{mimetype:'audio/ogg',ptt:true}}],['sent',true,{imageMessage:{mimetype:'image/jpeg',caption:'Foto'}}]]){
+  sockets[0].ev.emit('messages.upsert',{type:'notify',messages:[{key:{id,fromMe,remoteJid:'5511988887777@s.whatsapp.net'},message,messageTimestamp:1700000000}]});
+ }
+ for(let n=0;n<50&&payloads.length<2;n++)await tick();
+ assert.equal(puts.length,2);assert.ok(puts[0].key.includes('/in/'));assert.ok(puts[1].key.includes('/out/'));assert.equal(payloads[1].event_type,'message_create');assert.ok(payloads.every(p=>p.data.media.includes('signed=yes')&&!p.data.media.includes('token=')));
+ assert.equal(store.db.prepare('SELECT count(*) AS n FROM media_objects').get().n,2);assert.equal(store.db.prepare('SELECT count(*) AS n FROM media').get().n,0);
+});
