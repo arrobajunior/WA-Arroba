@@ -1,5 +1,8 @@
 # WhatsApp API — publicação no Railway
 
+> Esta proposta altera o fluxo de novas mídias: não há novas gravações em S3/SQLite. Consulte COMPATIBILITY.md para o contrato atual e suas limitações. A seção de S3 abaixo descreve a versão anterior e só permanece relevante para leitura de arquivos legados.
+
+
 ## O que esta versão faz
 
 - Admin Master entra com e-mail e senha, cria/edita usuários, bloqueia acessos, redefine senhas e vê todas as instâncias.

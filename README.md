@@ -1,5 +1,8 @@
 # WhatsApp API
 
+**Proposta em revisão:** novas mídias passam apenas por memória temporária; arquivamento definitivo pertence ao cliente. Consulte [matriz de compatibilidade e limitações](COMPATIBILITY.md). Não há declaração de paridade integral com UltraMsg.
+
+
 Plataforma independente para criar usuários, gerenciar instâncias e conectar WhatsApp por QR. Executa no Railway com Docker e um volume persistente.
 
 Este repositório contém somente a aplicação. A raiz é o contexto Docker e contém o Dockerfile. O REA foi usado para investigar a referência UltraMsg; não é dependência de execução desta aplicação.
