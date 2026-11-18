@@ -5,7 +5,7 @@ Atualização: 18/11/2026. Repositório: arrobajunior/WA-Arroba.
 ## Objetivo e arquitetura
 Gateway WhatsApp próprio usando Baileys, com interface compatível com comandos UltraMsg para os sistemas clientes do MF Rural. Node >=24.15; SQLite operacional; credenciais criptografadas; painel USER/ADMIN/Master; mídia nova retransmitida temporariamente em memória e arquivada pelo sistema cliente.
 Código: transport.mjs (WhatsApp/webhooks), compatibility-api.mjs (comandos), instance-settings.mjs (normalização/configurações), store.mjs (persistência), server.mjs (HTTP/painel).
-Leia também README.md, COMPATIBILITY.md e DEPLOYMENT.md. O ambiente descrito em DEPLOYMENT.md é Railway, serviço WA-Arroba, branch main, volume /app/data. Não se confirmou o deploy da alteração de LID nesta sessão.
+Leia também README.md, COMPATIBILITY.md e DEPLOYMENT.md. O ambiente descrito em DEPLOYMENT.md é Railway, serviço WA-Arroba, branch main, volume /app/data. A implantação da correção de LID (e2cece3) foi confirmada como SUCCESS no Railway em 18/11/2026; a homologação de telefone real com a TI não foi informada.
 
 ## Situação informada pelo usuário
 A TI confirmou envio funcionando e recebimento do webhook. O bloqueio é data.from conter um identificador @lid, impedindo localizar o cliente por telefone.
@@ -31,3 +31,7 @@ Não é necessário levar todo o chat. Os arquivos descrevem o estado conhecido;
 - Código do próprio repositório, especialmente transport.mjs e DEPLOYMENT.md.
 - Baileys 6.7.24 instalado: lib/Utils/decode-wa-message.js (senderPn/participantPn), lib/Types/Contact.d.ts (id/lid/jid) e lib/Socket/messages-recv.js (chats.phoneNumberShare).
 - Documentação upstream: https://baileys.wiki/docs/migration/to-v7.0.0/ (conceitos de identidade; não aplicar migração automaticamente).
+
+## Administração Geral e alertas de conexão
+Veja [ALERTAS.md](ALERTAS.md). Todos os ADMINs podem configurar o destinatário; USER não pode acessar essa área. Alterações e testes são auditados. A página principal destaca quedas em vermelho e atualiza a cada 10 segundos.
+O código de envio SES está implementado, mas as variáveis SES_SMTP_USER e SES_SMTP_PASS ainda não foram gravadas no Railway: a revisão automática exigiu autorização explícita para enviar as credenciais do guia ao serviço WA-Arroba/production. Não contornar esse bloqueio. O próximo passo é obter essa autorização, configurar o SMTP e homologar um envio para o destinatário cadastrado pelo admin.

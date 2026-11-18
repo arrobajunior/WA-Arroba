@@ -30,3 +30,15 @@ Não foi feita atualização da biblioteca Baileys.
 - Avaliar cobertura e necessidade de atualizar Baileys em trabalho separado, com validação de sessões.
 - Avaliar unificação de identidade em histórico/consultas e ações; fora desta correção de payload.
 - Manter limites de compatibilidade, operação e armazenamento documentados.
+
+## Administração Geral — ponto de retomada
+- [x] Configuração compartilhada, acesso ADMIN, log imutável pela aplicação.
+- [x] Histórico persistente, deduplicação, recuperação e retentativas de e-mail.
+- [x] E-mail HTML de alerta, texto alternativo e botão de teste auditado.
+- [x] Destaque vermelho no dashboard/listagem e atualização automática.
+- [x] 42 testes automatizados aprovados.
+- [ ] Obter autorização explícita para gravar as credenciais SES do guia no serviço Railway WA-Arroba, ambiente production. Houve rejeição da revisão automática; não contornar por outro caminho.
+- [ ] Configurar SES_SMTP_USER e SES_SMTP_PASS nesse serviço, sem publicar valores.
+- [ ] Admin cadastrar e-mail em Administração Geral e usar Enviar e-mail de teste.
+- [ ] Homologar queda/recuperação com uma instância de teste já pareada, sem desconectar canais reais apenas para testar.
+- [ ] Registrar resultado da implantação desta alteração e do envio real. Código publicado não comprova entrega de e-mail.

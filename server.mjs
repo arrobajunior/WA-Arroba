@@ -11,6 +11,7 @@ import { createBranding } from './branding.mjs';
 import { openStore } from './store.mjs';
 import { passwordHash,passwordValid,digest,equal,sessionToken,publicUser } from './auth.mjs';
 import { createTransport } from './transport.mjs';
+import {createConnectionAlerts} from './connection-alerts.mjs';
 
 const directory=path.dirname(fileURLToPath(import.meta.url));
 const fail=(status,code,message)=>Object.assign(new Error(message),{status,code});
@@ -23,7 +24,7 @@ function webhookUrl(value){if(value==null)return '';text(value,'webhook_url',204
 async function body(req,maxBytes=65536){let size=0;const chunks=[];for await(const chunk of req){size+=chunk.length;if(size>maxBytes)throw fail(413,'body_too_large','Arquivo ou corpo da requisição muito grande.');chunks.push(chunk);}const raw=Buffer.concat(chunks).toString('utf8');if(!raw)return {};const type=(req.headers['content-type']||'').split(';')[0];let parsed;if(type==='application/x-www-form-urlencoded')parsed=Object.fromEntries(new URLSearchParams(raw));else if(type==='application/json'){try{parsed=JSON.parse(raw);}catch{throw fail(400,'invalid_json','JSON inválido.');}}else throw fail(415,'unsupported_type','Use JSON ou formulário.');if(!parsed||typeof parsed!=='object'||Array.isArray(parsed))throw fail(400,'invalid_body','Envie um objeto.');return parsed;}
 const json=(res,status,data)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8'});res.end(JSON.stringify(data));};
 
-export async function createApp({dataDir=path.join(directory,'.data'),port=3210,publicUrl,adminEmail,adminPassword,transportFactory=createTransport,restoreConnections=true,mediaStorage=null,mediaRelay=createMediaRelay()}={}) {
+export async function createApp({dataDir=path.join(directory,'.data'),port=3210,publicUrl,adminEmail,adminPassword,transportFactory=createTransport,restoreConnections=true,mediaStorage=null,mediaRelay=createMediaRelay(),alertOptions={}}={}) {
   let publicOrigin;
   if(publicUrl){const u=new URL(publicUrl);if(!['http:','https:'].includes(u.protocol)||u.username||u.password||u.pathname!=='/'||u.search||u.hash)throw new Error('PUBLIC_URL deve conter somente protocolo e domínio.');publicOrigin=u.origin;}
   // S3 is only read on demand to preserve access to files from older releases.
@@ -41,14 +42,15 @@ export async function createApp({dataDir=path.join(directory,'.data'),port=3210,
     }
   }catch(e){store.close();throw e;}
   const mediaBaseUrl=publicOrigin||`http://127.0.0.1:${port}`;
-  const transport=transportFactory(store,{mediaBaseUrl,mediaRelay,legacyStorage:legacy}),attempts=new Map();
+  const alerts=createConnectionAlerts(store,{publicUrl:publicOrigin,appName:()=>branding.read().name,...alertOptions});
+  const transport=transportFactory(store,{mediaBaseUrl,mediaRelay,legacyStorage:legacy,onConnectionState:alerts.stateChanged}),attempts=new Map();
   const dummyHash=await passwordHash(randomBytes(32).toString('hex'));
   const secure=publicOrigin?.startsWith('https:');
   const cookie=(token,maxAge)=>`wa_session=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${secure?'; Secure':''}`;
   const lookup=id=>{const row=db.prepare('SELECT * FROM instances WHERE id=?').get(id);if(!row)throw fail(404,'not_found','Instância não encontrada.');return row;};
   const authorize=(user,row)=>{if(user.role!=='admin'&&user.id!==row.owner_id)throw fail(404,'not_found','Instância não encontrada.');};
   const counts=id=>{const result={total:0,queue:0,sent:0,unsent:0,unknown:0,sending:0};for(const r of db.prepare('SELECT status,count(*) AS n FROM messages WHERE instance_id=? GROUP BY status').all(id)){result[r.status]=r.n;result.total+=r.n;}return result;};
-  const serialize=(row,secret=false)=>({id:row.id,name:row.name,phone:row.phone,owner_id:row.owner_id,owner_name:db.prepare('SELECT name FROM users WHERE id=?').get(row.owner_id)?.name,created_at:row.created_at,status:transport.state(row.id).status,error:transport.state(row.id).error,message_counts:counts(row.id),webhook_url:row.webhook_url||'',...(secret?{token:decrypt(row.token)}:{})});
+  const serialize=(row,secret=false)=>({id:row.id,name:row.name,phone:row.phone,owner_id:row.owner_id,owner_name:db.prepare('SELECT name FROM users WHERE id=?').get(row.owner_id)?.name,created_at:row.created_at,status:transport.state(row.id).status,error:transport.state(row.id).error,first_connected_at:row.first_connected_at,last_connected_at:row.last_connected_at,connection_alert:db.prepare('SELECT id,opened_at,reason,notification_status FROM connection_incidents WHERE instance_id=? AND resolved_at IS NULL').get(row.id)||null,message_counts:counts(row.id),webhook_url:row.webhook_url||'',...(secret?{token:decrypt(row.token)}:{})});
   const compatibility=createCompatibilityApi({store:{...store,equalToken:equal},transport,relay:mediaRelay,baseUrl:mediaBaseUrl,legacy,json,fail,text,keys,body,webhookUrl});
   let shuttingDown=false;
   const server=http.createServer(async(req,res)=>{
@@ -96,6 +98,19 @@ export async function createApp({dataDir=path.join(directory,'.data'),port=3210,
         if(!session)throw fail(401,'unauthorized','Faça login para continuar.');
         if(pathname==='/api/auth/me'&&method==='GET')return json(res,200,{user:publicUser(session)});
         if(pathname==='/api/auth/logout'&&method==='POST'){db.prepare('DELETE FROM sessions WHERE id=?').run(digest(sessionToken(req)));res.setHeader('Set-Cookie',cookie('',0));return json(res,200,{ok:true});}
+        if(pathname.startsWith('/api/general-admin')){
+          if(session.role!=='admin')throw fail(403,'forbidden','Acesso administrativo necessário.');
+          if(pathname==='/api/general-admin'&&method==='GET')return json(res,200,{settings:alerts.settings(),smtp_ready:alerts.mailReady(),audit:db.prepare('SELECT * FROM admin_audit ORDER BY id DESC LIMIT 100').all(),incidents:db.prepare('SELECT c.*,i.name AS instance_name,i.phone FROM connection_incidents c JOIN instances i ON i.id=c.instance_id ORDER BY c.id DESC LIMIT 100').all()});
+          if(pathname==='/api/general-admin'&&method==='PATCH'){
+            const input=await body(req);keys(input,['alert_email']);
+            // A single plain address, never SMTP headers, lists or display names.
+            const raw=text(input.alert_email,'email de alerta',254).trim();
+            if(!/^[A-Za-z0-9.!#$%&'*+\/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+$/.test(raw))throw fail(400,'invalid_email','Informe um único endereço de e-mail válido.');
+            return json(res,200,{settings:alerts.updateEmail(session,raw)});
+          }
+          if(pathname==='/api/general-admin/test-email'&&method==='POST'){keys(await body(req),[]);await alerts.sendTest(session);return json(res,200,{ok:true});}
+          throw fail(404,'not_found','Endpoint não encontrado.');
+        }
         if(pathname==='/api/users') {
           if(session.role!=='admin')throw fail(403,'forbidden','Acesso administrativo necessário.');
           if(method==='GET')return json(res,200,{users:db.prepare('SELECT id,name,email,role,created_at,active,is_master FROM users ORDER BY created_at').all()});
@@ -149,7 +164,7 @@ export async function createApp({dataDir=path.join(directory,'.data'),port=3210,
           const rows=session.role==='admin'?db.prepare('SELECT * FROM instances ORDER BY created_at DESC').all():db.prepare('SELECT * FROM instances WHERE owner_id=? ORDER BY created_at DESC').all(session.id);
           const items=rows.map(r=>serialize(r));
           if(pathname==='/api/instances')return json(res,200,{instances:items});
-          const c={instances:items.length,connected:0,queue:0,sent:0,messages:0};for(const i of items){if(i.status==='authenticated')c.connected++;c.queue+=i.message_counts.queue;c.sent+=i.message_counts.sent;c.messages+=i.message_counts.total;}return json(res,200,{counts:c,instances:items});
+          const c={instances:items.length,connected:0,queue:0,sent:0,messages:0,alerts:0};for(const i of items){if(i.connection_alert)c.alerts++;if(i.status==='authenticated')c.connected++;c.queue+=i.message_counts.queue;c.sent+=i.message_counts.sent;c.messages+=i.message_counts.total;}return json(res,200,{counts:c,instances:items});
         }
         const match=pathname.match(/^\/api\/instances\/([a-f0-9]{8})(?:\/(qr|connect|disconnect|token|messages))?$/);
         if(match){const [,id,action]=match,row=lookup(id);authorize(session,row);
@@ -213,8 +228,9 @@ export async function createApp({dataDir=path.join(directory,'.data'),port=3210,
   }
   server.requestTimeout=30000;server.headersTimeout=15000;
   let stop;
-  server.shutdown=()=>stop||=(async()=>{shuttingDown=true;const drained=new Promise(resolve=>server.close(resolve));server.closeIdleConnections();await drained;await transport.close();mediaRelay.close();legacyStorage?.close?.();store.close();})();
+  server.shutdown=()=>stop||=(async()=>{shuttingDown=true;const drained=new Promise(resolve=>server.close(resolve));server.closeIdleConnections();await drained;await transport.close();await alerts.close();mediaRelay.close();legacyStorage?.close?.();store.close();})();
   if(restoreConnections)transport.restore();
+  alerts.start(transport.state);
   return server;
 }
 

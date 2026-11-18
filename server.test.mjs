@@ -9,6 +9,32 @@ import {createApp} from './server.mjs';
 import {openStore} from './store.mjs';
 const admin={email:'admin@example.com',password:'administrator-test-password'};
 const fakeTransport=()=>({state:()=>({status:'disconnected',qr:null}),connect:()=>{},disconnect:async()=>{},flush:()=>{},restore:()=>{},close:async()=>{}});
+
+test('all admins share audited alert settings; USER and anonymous cannot access them; dashboard incidents stay scoped',async t=>{
+ let change;const states=new Map(),sent=[];
+ const app=await fixture(t,{alertOptions:{mailReady:()=>true,sendEmail:async input=>{sent.push(input);return {messageId:'test'};}},transportFactory:(_store,options)=>{change=(id,status)=>{states.set(id,status);options.onConnectionState(id,status,'Test connection event');};return {...fakeTransport(),state:id=>({status:states.get(id)||'disconnected',qr:null})};}});
+ const root=await login(app);
+ const create=async(name,role)=>{const credentials={email:name+'@example.com',password:name+'-test-password-long'};const made=await app.request('/api/users',{method:'POST',cookie:root,data:{name,role,...credentials}});assert.equal(made.status,201);return {cookie:await login(app,credentials),user:made.body.user};};
+ const other=await create('admin2','admin'),alice=await create('alice','user'),bob=await create('bob','user');
+ assert.equal((await app.request('/api/general-admin')).status,401);
+ for(const method of ['GET','PATCH'])assert.equal((await app.request('/api/general-admin',{method,cookie:alice.cookie,...(method==='PATCH'?{data:{alert_email:'bad@example.com'}}:{})})).status,403);
+ assert.equal((await app.request('/api/general-admin/test-email',{method:'POST',cookie:alice.cookie,data:{}})).status,403);
+ for(const value of ['','bad','a@example.com,b@example.com','a@example.com\r\nBcc:b@example.com','Name <a@example.com>'])assert.equal((await app.request('/api/general-admin',{method:'PATCH',cookie:root,data:{alert_email:value}})).status,400);
+ assert.equal((await app.request('/api/general-admin',{method:'PATCH',cookie:root,data:{alert_email:'first@example.com'},headers:{'X-Requested-With':''}})).status,403);
+ assert.equal((await app.request('/api/general-admin',{method:'PATCH',cookie:root,data:{alert_email:'first@example.com'}})).status,200);
+ assert.equal((await app.request('/api/general-admin',{cookie:other.cookie})).body.settings.alert_email,'first@example.com');
+ assert.equal((await app.request('/api/general-admin',{method:'PATCH',cookie:other.cookie,data:{alert_email:'second@example.com'}})).status,200);
+ let adminView=(await app.request('/api/general-admin',{cookie:root})).body;assert.equal(adminView.audit.length,2);assert.equal(adminView.audit[0].actor_id,other.user.id);assert.equal(JSON.parse(adminView.audit[0].before_value).alert_email,'first@example.com');
+ const instance=(await app.request('/api/instances',{method:'POST',cookie:alice.cookie,data:{name:'Alice channel'}})).body.instance;
+ change(instance.id,'qr');assert.equal((await app.request('/api/dashboard',{cookie:alice.cookie})).body.counts.alerts,0);
+ change(instance.id,'authenticated');change(instance.id,'disconnected');await new Promise(r=>setTimeout(r,10));
+ const mine=(await app.request('/api/dashboard',{cookie:alice.cookie})).body;assert.equal(mine.counts.alerts,1);assert.ok(mine.instances[0].connection_alert);assert.equal(mine.instances[0].token,undefined);
+ assert.equal((await app.request('/api/dashboard',{cookie:bob.cookie})).body.counts.alerts,0);assert.equal((await app.request('/api/dashboard',{cookie:other.cookie})).body.counts.alerts,1);assert.equal(sent.length,1);assert.equal(sent[0].to,'second@example.com');
+ change(instance.id,'retrying');await new Promise(r=>setTimeout(r,10));assert.equal(sent.length,1);
+ change(instance.id,'authenticated');assert.equal((await app.request('/api/dashboard',{cookie:alice.cookie})).body.counts.alerts,0);
+ assert.equal((await app.request('/api/general-admin/test-email',{method:'POST',cookie:other.cookie,data:{}})).status,200);
+ adminView=(await app.request('/api/general-admin',{cookie:root})).body;assert.equal(adminView.audit[0].action,'alert_email_test_sent');assert.equal(sent.at(-1).test,true);
+});
 async function start(dataDir,options={}){
  const server=await createApp({dataDir,port:0,adminEmail:admin.email,adminPassword:admin.password,transportFactory:fakeTransport,...options});server.listen(0,'127.0.0.1');await once(server,'listening');const base=`http://127.0.0.1:${server.address().port}`;
  return {base,close:()=>server.shutdown(),request(route,{method='GET',data,headers={},cookie}={}){return new Promise((resolve,reject)=>{const req=http.request(base+route,{method,headers:{'Content-Type':'application/json','X-Requested-With':'wa-platform',Origin:base,...(cookie?{Cookie:cookie}:{}),...headers}},res=>{const chunks=[];res.on('data',c=>chunks.push(c));res.on('end',()=>{try{resolve({status:res.statusCode,body:JSON.parse(Buffer.concat(chunks).toString()),headers:{get:name=>{const value=res.headers[name.toLowerCase()];return Array.isArray(value)?value.join(', '):value;}}});}catch(e){reject(e);}});});req.on('error',reject);req.end(data===undefined?undefined:JSON.stringify(data));});}};

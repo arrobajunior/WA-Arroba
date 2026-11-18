@@ -37,6 +37,22 @@ export function openStore(directory) {
     if(!columns(table).includes(column))db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   }
   // Only the legacy master is promoted during the one-time schema migration.
+  for(const name of ['first_connected_at','last_connected_at'])if(!columns('instances').includes(name))db.exec(`ALTER TABLE instances ADD COLUMN ${name} TEXT`);
+  // Existing phones/registered credentials are evidence of a past connection.
+  for(const row of db.prepare('SELECT id,phone,updated_at FROM instances WHERE first_connected_at IS NULL').all()){
+    let registered=false;
+    try{const creds=db.prepare("SELECT value FROM wa_keys WHERE instance_id=? AND kind='creds' AND key_id='main'").get(row.id);registered=Boolean(creds&&JSON.parse(decrypt(creds.value)).registered);}catch{/* Preserve unreadable legacy state. */}
+    const history=db.prepare("SELECT 1 FROM messages WHERE instance_id=? AND (direction='in' OR ack IN ('server','device','read','played')) LIMIT 1").get(row.id);
+    if(row.phone||registered||history)db.prepare('UPDATE instances SET first_connected_at=?,last_connected_at=? WHERE id=?').run(row.updated_at,row.updated_at,row.id);
+  }
+  db.exec(`CREATE TABLE IF NOT EXISTS general_settings(id INTEGER PRIMARY KEY CHECK(id=1),alert_email TEXT NOT NULL DEFAULT '',updated_at TEXT,updated_by TEXT);
+    INSERT OR IGNORE INTO general_settings(id) VALUES(1);
+    CREATE TABLE IF NOT EXISTS admin_audit(id INTEGER PRIMARY KEY AUTOINCREMENT,created_at TEXT NOT NULL,actor_id TEXT NOT NULL,actor_name TEXT NOT NULL,actor_email TEXT NOT NULL,action TEXT NOT NULL,before_value TEXT NOT NULL,after_value TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS connection_incidents(id INTEGER PRIMARY KEY AUTOINCREMENT,instance_id TEXT NOT NULL REFERENCES instances(id),opened_at TEXT NOT NULL,reason TEXT NOT NULL,resolved_at TEXT,notification_status TEXT NOT NULL DEFAULT 'pending',attempts INTEGER NOT NULL DEFAULT 0,next_attempt_at INTEGER NOT NULL DEFAULT 0,recipient TEXT NOT NULL DEFAULT '',message_id TEXT NOT NULL DEFAULT '',last_error TEXT NOT NULL DEFAULT '');
+    CREATE UNIQUE INDEX IF NOT EXISTS connection_incident_open ON connection_incidents(instance_id) WHERE resolved_at IS NULL;
+    CREATE INDEX IF NOT EXISTS connection_incident_pending ON connection_incidents(notification_status,next_attempt_at);
+    CREATE TRIGGER IF NOT EXISTS admin_audit_no_update BEFORE UPDATE ON admin_audit BEGIN SELECT RAISE(ABORT,'Audit entries cannot be updated'); END;
+    CREATE TRIGGER IF NOT EXISTS admin_audit_no_delete BEFORE DELETE ON admin_audit BEGIN SELECT RAISE(ABORT,'Audit entries cannot be deleted'); END;`);
   if(!columns('users').includes('is_master')){
     db.exec("ALTER TABLE users ADD COLUMN is_master INTEGER NOT NULL DEFAULT 0");
     db.exec("UPDATE users SET is_master=1,active=1 WHERE id=(SELECT id FROM users WHERE role='admin' ORDER BY created_at,id LIMIT 1)");

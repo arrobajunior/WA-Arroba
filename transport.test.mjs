@@ -9,6 +9,15 @@ import {createMediaRelay} from './media-relay.mjs';
 import {createTransport} from './transport.mjs';
 async function setup(t,extra={}){const dir=await mkdtemp(path.join(tmpdir(),'wa-transport-test-'));const store=openStore(dir),sockets=[];store.db.prepare('INSERT INTO users(id,name,email,password_hash,role,created_at) VALUES(?,?,?,?,?,?)').run('owner','Owner','owner@example.com','unused','user','now');store.db.prepare('INSERT INTO instances(id,name,token,created_at,updated_at) VALUES(?,?,?,?,?)').run('abcd1234','test',store.encrypt('token'),'now','now');store.db.prepare('UPDATE instances SET owner_id=?').run('owner');const transport=createTransport(store,{socketFactory:config=>{const s={ev:new EventEmitter(),user:{id:'5511999999999:1@s.whatsapp.net'},config,end(){},logout:async()=>{},sendMessage:async()=>({}),updateMediaMessage:async()=>{}};sockets.push(s);return s;},retryDelay:5,...extra});t.after(async()=>{await transport.close();store.close();await rm(dir,{recursive:true,force:true});});return {store,transport,sockets,dir};}
 const tick=()=>new Promise(r=>setTimeout(r,20));
+test('connection lifecycle emits alert transitions for real closes and logout, while process shutdown stays silent',async t=>{
+ const transitions=[];const {transport,sockets}=await setup(t,{retryDelay:100000,onConnectionState:(...args)=>transitions.push(args)});
+ transport.connect('abcd1234');const first=sockets[0];first.ev.emit('connection.update',{qr:'test'});first.ev.emit('connection.update',{connection:'open'});
+ assert.equal(transitions.at(-1)[1],'authenticated');first.ev.emit('connection.update',{connection:'close',lastDisconnect:{error:{output:{statusCode:401}}}});
+ assert.equal(transitions.at(-1)[1],'disconnected');assert.match(transitions.at(-1)[2],/QR Code/);
+ transport.connect('abcd1234');sockets[1].ev.emit('connection.update',{connection:'open'});await transport.disconnect('abcd1234');assert.match(transitions.at(-1)[2],/painel ou pela API/);
+ transport.connect('abcd1234');sockets[2].ev.emit('connection.update',{connection:'open'});const count=transitions.length;await transport.close();assert.equal(transitions.length,count);
+ first.ev.emit('connection.update',{connection:'close'});assert.equal(transitions.length,count);
+});
 test('QR lifecycle persists encrypted authentication, ignores stale events and handles logout',async t=>{
  const {store,transport,sockets,dir}=await setup(t);transport.connect('abcd1234');const first=sockets[0];first.ev.emit('connection.update',{qr:'test-qr'});assert.equal(transport.state('abcd1234').qr,'test-qr');transport.connect('abcd1234');assert.equal(sockets.length,1);
  first.config.auth.creds.testSecret='sensitive-test-secret';first.ev.emit('creds.update',{});await first.config.auth.keys.set({test:{one:Buffer.from('private-key')}});
