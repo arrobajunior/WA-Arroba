@@ -83,13 +83,34 @@ export function createTransport(store, { socketFactory=makeWASocket, retryDelay=
     db.prepare('UPDATE instances SET auto_connect=1 WHERE id=?').run(id);
     try {
       e.socket=socketFactory({auth:credentials.state,logger:pino({level:'silent'}),browser:Browsers.ubuntu('Chrome'),markOnlineOnConnect:false,syncFullHistory:false,shouldSyncHistoryMessage:()=>false,connectTimeoutMs:30000,defaultQueryTimeoutMs:30000});
+      // Mapeamentos por instância, criptografados junto às chaves da sessão.
+      const normalize=value=>typeof value==='string'?value.replace(/:\d+(?=@)/,'').replace('@c.us','@s.whatsapp.net'):'';
+      const isPhone=value=>/^\d+@s\.whatsapp\.net$/.test(normalize(value));
+      const isLid=value=>/^\d+@lid$/.test(normalize(value));
+      async function learnPair(lid,phone) {
+        lid=normalize(lid);phone=normalize(phone);
+        if(valid()&&isLid(lid)&&isPhone(phone))await credentials.state.keys.set({'webhook-lid-phone':{[lid]:phone}});
+      }
+      const learnContact=c=>learnPair(isLid(c.id)?c.id:c.lid,isPhone(c.id)?c.id:c.jid);
+      async function resolvePeer(jid,alternate) {
+        if(!isLid(jid))return jid;
+        if(isPhone(alternate)){await learnPair(jid,alternate);return normalize(alternate);}
+        const key=normalize(jid),saved=await credentials.state.keys.get('webhook-lid-phone',[key]);
+        if(isPhone(saved[key]))return saved[key];
+        try {
+          const mapped=await e.socket.signalRepository?.lidMapping?.getPNForLID?.(key);
+          if(isPhone(mapped)){await learnPair(key,mapped);return normalize(mapped);}
+        } catch {/* Ausência do mapeamento não deve perder a mensagem. */}
+        return jid;
+      }
+      e.socket.ev.on('chats.phoneNumberShare',pair=>{if(valid())learnPair(pair.lid,pair.jid).catch(()=>{});});
       const cacheMessages=messages=>{for(const msg of messages||[]){const jid=msg.key?.remoteJid;if(!jid||!msg.key?.id)continue;const desc=describeMessage(msg);if(desc)remember(e.messages,msg.key.id,{key:msg.key,messageTimestamp:Number(msg.messageTimestamp)||Math.floor(Date.now()/1000),description:desc});}};
-      e.socket.ev.on('contacts.upsert',contacts=>{if(valid())for(const c of contacts)remember(e.contacts,c.id,c);});
-      e.socket.ev.on('contacts.update',contacts=>{if(valid())for(const c of contacts)remember(e.contacts,c.id,{...e.contacts.get(c.id),...c});});
+      e.socket.ev.on('contacts.upsert',contacts=>{if(valid())for(const c of contacts){remember(e.contacts,c.id,c);learnContact(c).catch(()=>{});}});
+      e.socket.ev.on('contacts.update',contacts=>{if(valid())for(const c of contacts){const merged={...e.contacts.get(c.id),...c};remember(e.contacts,c.id,merged);learnContact(merged).catch(()=>{});}});
       e.socket.ev.on('chats.upsert',chats=>{if(valid())for(const c of chats)remember(e.chats,c.id,c);});
       e.socket.ev.on('chats.update',chats=>{if(valid())for(const c of chats)remember(e.chats,c.id,{...e.chats.get(c.id),...c});});
       e.socket.ev.on('chats.delete',ids=>{if(valid())for(const jid of ids)e.chats.delete(jid);});
-      e.socket.ev.on('messaging-history.set',snapshot=>{if(!valid())return;for(const c of snapshot.contacts||[])remember(e.contacts,c.id,c);for(const c of snapshot.chats||[])remember(e.chats,c.id,c);cacheMessages(snapshot.messages);});
+      e.socket.ev.on('messaging-history.set',snapshot=>{if(!valid())return;for(const c of snapshot.contacts||[]){remember(e.contacts,c.id,c);learnContact(c).catch(()=>{});}for(const c of snapshot.chats||[])remember(e.chats,c.id,c);cacheMessages(snapshot.messages);});
       e.socket.ev.on('creds.update',()=>{if(valid())credentials.save();});
       e.socket.ev.on('connection.update',update=>{
         if(!valid())return;
@@ -129,6 +150,9 @@ export function createTransport(store, { socketFactory=makeWASocket, retryDelay=
         const desc=describeMessage(msg);if(!desc)return;
         if(e.webhooked.has(msg.key.id))return;remember(e.webhooked,msg.key.id,true);
         const fromMe=!!msg.key.fromMe;
+        const peer=await resolvePeer(jid,msg.key.remoteJidAlt||(!fromMe?msg.key.senderPn:undefined));
+        const author=await resolvePeer(msg.key.participant||'',msg.key.participantAlt||msg.key.participantPn);
+        if(!valid())return;
         const ts=Number(msg.messageTimestamp)||Math.floor(Date.now()/1000);
         const self=(e.socket.user?.id||'').split(':')[0].split('@')[0];
         // Evita duplicar no histórico mensagens já registradas pelo envio via API (mesmo provider_id)
@@ -147,7 +171,7 @@ export function createTransport(store, { socketFactory=makeWASocket, retryDelay=
         const tracked=db.prepare('SELECT m.reference_id,a.api_id FROM messages m JOIN api_messages a ON a.message_id=m.id WHERE m.instance_id=? AND m.provider_id=?').get(id,msg.key.id);const referenceId=tracked?.reference_id||'';
         const url=webhookFor(id,fromMe?'message_create':'message_received');
         const context=Object.values(msg.message||{}).find(v=>v?.contextInfo)?.contextInfo||{};
-        if(url)deliverWebhook(url,{event_type:fromMe?'message_create':'message_received',instanceId:id,id:fromMe?(tracked?.api_id||''):'',referenceId,data:{id:webhookId(jid,msg.key.id,fromMe),from:publicJid(fromMe?self:jid),to:publicJid(fromMe?jid:self),author:publicJid(msg.key.participant||''),fromMe,body:desc.body,type:desc.type,ack:'',time:ts,pushname:msg.pushName||'',media:media||'',isForwarded:Boolean(context.isForwarded),isMentioned:(context.mentionedJid||[]).some(j=>publicJid(j)===publicJid(e.socket.user?.id||'')),quotedMsg:context.stanzaId?{id:context.stanzaId,body:context.quotedMessage?.conversation||context.quotedMessage?.extendedTextMessage?.text||''}:{},mentionedIds:(context.mentionedJid||[]).map(publicJid)}});
+        if(url)deliverWebhook(url,{event_type:fromMe?'message_create':'message_received',instanceId:id,id:fromMe?(tracked?.api_id||''):'',referenceId,data:{id:webhookId(jid,msg.key.id,fromMe),from:publicJid(fromMe?self:peer),to:publicJid(fromMe?peer:self),author:publicJid(author),...(isLid(jid)?{remoteJid:publicJid(jid),phoneResolved:isPhone(peer)}:{}),fromMe,body:desc.body,type:desc.type,ack:'',time:ts,pushname:msg.pushName||'',media:media||'',isForwarded:Boolean(context.isForwarded),isMentioned:(context.mentionedJid||[]).some(j=>publicJid(j)===publicJid(e.socket.user?.id||'')),quotedMsg:context.stanzaId?{id:context.stanzaId,body:context.quotedMessage?.conversation||context.quotedMessage?.extendedTextMessage?.text||''}:{},mentionedIds:(context.mentionedJid||[]).map(publicJid)}});
       }
       e.socket.ev.on('messages.upsert',({messages,type})=>{
         if(!valid()||type!=='notify')return; // ignora replay de histórico em reconexões

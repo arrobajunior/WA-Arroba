@@ -173,3 +173,37 @@ test('instance reset clears its own state, preserves other instances and reopens
  await transport.reset('abcd1234');assert.equal(sockets.length,2);assert.equal(transport.state('abcd1234').status,'initialize');assert.equal(relay.get('abcd1234',key),null);
  assert.equal(store.db.prepare('SELECT count(*) AS n FROM messages WHERE instance_id=?').get('abcd1234').n,0);assert.equal(store.db.prepare('SELECT count(*) AS n FROM messages WHERE instance_id=?').get('eeeeffff').n,1);assert.equal(store.db.prepare('SELECT webhook_url FROM instances WHERE id=?').get('abcd1234').webhook_url,'');
 });
+
+test('LID webhooks resolve verified phones, persist across restart and preserve unresolved/group identities',async t=>{
+ const {store,transport,sockets}=await setup(t);
+ store.db.prepare('UPDATE instances SET webhook_url=?').run('https://example.com/hook');
+ const hooks=[],realFetch=globalThis.fetch;
+ globalThis.fetch=async(url,options)=>{hooks.push(JSON.parse(options.body));return {ok:true};};
+ t.after(()=>{globalThis.fetch=realFetch;});
+ transport.connect('abcd1234');
+ const emit=async(key)=>{sockets.at(-1).ev.emit('messages.upsert',{type:'notify',messages:[{key,message:{conversation:'test'}}]});await tick();return hooks.at(-1).data;};
+ const lid='224652626501854@lid',phone='5511888888888@s.whatsapp.net';
+ let data=await emit({id:'mapped',remoteJid:lid,senderPn:phone});
+ assert.equal(data.from,'5511888888888@c.us');assert.equal(data.remoteJid,lid);assert.equal(data.phoneResolved,true);
+ assert.equal(data.id,'false_'+lid+'_mapped');
+ const saved=store.db.prepare("SELECT value FROM wa_keys WHERE kind='webhook-lid-phone'").get();
+ assert.ok(saved);assert.equal(saved.value.includes('5511888888888'),false);
+ await transport.restart('abcd1234');
+ data=await emit({id:'afterRestart',remoteJid:lid});assert.equal(data.from,'5511888888888@c.us');
+ data=await emit({id:'unknown',remoteJid:'333333333333@lid'});assert.equal(data.from,'333333333333@lid');assert.equal(data.phoneResolved,false);
+ sockets.at(-1).ev.emit('contacts.upsert',[{id:'444444444444@lid',jid:phone}]);await tick();
+ data=await emit({id:'contact',remoteJid:'444444444444@lid'});assert.equal(data.from,'5511888888888@c.us');
+ sockets.at(-1).ev.emit('chats.phoneNumberShare',{lid:'555555555555@lid',jid:phone});await tick();
+ data=await emit({id:'share',remoteJid:'555555555555@lid'});assert.equal(data.phoneResolved,true);
+ data=await emit({id:'group',remoteJid:'12345-67890@g.us',participant:'666666666666@lid',participantPn:phone,senderPn:phone});
+ assert.equal(data.from,'12345-67890@g.us');assert.equal(data.author,'5511888888888@c.us');
+ data=await emit({id:'outgoing',remoteJid:'777777777777@lid',fromMe:true,senderPn:'5511999999999@s.whatsapp.net'});
+ assert.equal(data.to,'777777777777@lid');assert.equal(data.phoneResolved,false);
+ sockets.at(-1).signalRepository={lidMapping:{getPNForLID:async()=>phone}};
+ data=await emit({id:'repository',remoteJid:'888888888888@lid'});assert.equal(data.from,'5511888888888@c.us');
+ sockets.at(-1).signalRepository.lidMapping.getPNForLID=async()=>{throw new Error('unavailable');};
+ data=await emit({id:'lookupError',remoteJid:'999999999999@lid'});assert.equal(data.phoneResolved,false);
+ store.db.prepare('INSERT INTO instances(id,name,token,created_at,updated_at,owner_id,webhook_url) VALUES(?,?,?,?,?,?,?)').run('eeeeffff','Other',store.encrypt('other'),'now','now','owner','https://example.com/hook');
+ transport.connect('eeeeffff');
+ data=await emit({id:'isolated',remoteJid:lid});assert.equal(data.from,lid);assert.equal(data.phoneResolved,false);
+});
