@@ -34,7 +34,7 @@ Email inclui nome/ID/número/responsável da instância, motivo, horário de Bra
 - SMTP aceito é confirmação de aceitação pelo provedor, não prova de entrega na caixa de entrada. Verifique spam/rejeições.
 
 ## Estado no fim desta implementação
-Código e testes completos. O envio de credenciais ao serviço Railway foi bloqueado pela revisão automática até autorização explícita para WA-Arroba/production; nenhuma credencial foi publicada. Destinatário será escolhido no painel pelo admin. Não foi enviado e-mail real nem desconectada uma instância real para teste.
+Código e testes completos; implantação da Administração Geral (a88ef44) confirmada como SUCCESS. Após autorização explícita do usuário em 18/11/2026, SES_SMTP_USER e SES_SMTP_PASS foram cadastradas no serviço Railway WA-Arroba/production, sem publicar valores. Esta atualização documental dispara implantação para aplicar as variáveis. Destinatário será escolhido/conferido no painel pelo admin e o botão de teste deve homologar o envio real. Não foi desconectada uma instância real para testar.
 
 ## Arquivos e validação
 alert-email.mjs: template e SMTP. connection-alerts.mjs: fila/ocorrências/log. store.mjs: migrações aditivas. transport.mjs: eventos de conexão. server.mjs: endpoints com autenticação/CSRF. public/: painel.
