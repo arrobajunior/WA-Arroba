@@ -4,7 +4,7 @@ import {mediaInput,multipart} from './media-input.mjs';
 import {MAX_MEDIA_BYTES} from './media-relay.mjs';
 import {readSettings,parseSettings,publicJid,whatsappJid} from './instance-settings.mjs';
 
-export function createCompatibilityApi({store,transport,relay,baseUrl,legacy,json,fail,text,keys,body,webhookUrl}){
+export function createCompatibilityApi({store,transport,relay,baseUrl,legacy,json,fail,text,keys,body,webhookUrl,activity}){
  const {db,encrypt,decrypt}=store;
  const mediaKinds=['image','audio','voice','video','document','sticker'];
  const numberId=id=>db.prepare('SELECT api_id FROM api_messages WHERE message_id=?').get(id)?.api_id;
@@ -48,9 +48,20 @@ export function createCompatibilityApi({store,transport,relay,baseUrl,legacy,jso
   }
   db.prepare("UPDATE messages SET status='expired',error='Mensagem expirou após 24 horas na fila.' WHERE instance_id=? AND status='queue' AND COALESCE(queued_at,CAST(strftime('%s',created_at) AS INTEGER))<?").run(id,Math.floor(Date.now()/1000)-86400);
   if(!supported.has(action))throw fail(501,'not_implemented','Operação ainda não implementada nesta API.');
+  let auditContext=null;
+  const startsConnection=method==='GET'&&['instance/qr','instance/qrCode'].includes(action)&&transport.state(id).status==='disconnected';
+  if(activity&&(method==='POST'||startsConnection)){
+   const before=action==='instance/settings'?activity.snapshot(row):{};
+   auditContext=activity.begin({instance:row,actor:activity.apiActor(id),action:'api.'+action.replaceAll('/','.'),source:'api',before,details:{method},peer_ip:req.socket.remoteAddress||''});
+   // Completion records only the status and an allowlisted configuration snapshot, never request bodies/tokens.
+   const context=auditContext;
+   res.once('finish',()=>{
+    try{const current=db.prepare('SELECT * FROM instances WHERE id=?').get(id);activity.finish(context,{after:res.statusCode<400&&action==='instance/settings'?activity.snapshot(current):{},...(res.statusCode>=400?{error:{code:'HTTP_'+res.statusCode},status:res.statusCode}:{})});}catch{console.error('[audit] Não foi possível concluir o registro da operação da API.');}
+   });
+  }
   if(action==='instance/status'&&method==='GET'){const s=transport.state(id);return json(res,200,{status:{accountStatus:s.status==='qr'?'qr':s.status}});}
   if(['instance/qr','instance/qrCode'].includes(action)&&method==='GET'){
-   let s=transport.state(id);if(s.status==='disconnected'){transport.connect(id);s=transport.state(id);}
+   let s=transport.state(id);if(s.status==='disconnected'){transport.connect(id,0,auditContext);s=transport.state(id);}
    if(action==='instance/qrCode')return json(res,200,{qrCode:s.qr||null});
    if(!s.qr)throw fail(409,'qr_unavailable','QR ainda não disponível.');res.writeHead(200,{'Content-Type':'image/png'});return res.end(await QRCode.toBuffer(s.qr,{width:280}));
   }
@@ -62,10 +73,10 @@ export function createCompatibilityApi({store,transport,relay,baseUrl,legacy,jso
     db.prepare('UPDATE instances SET settings=?,webhook_url=?,updated_at=? WHERE id=?').run(JSON.stringify(settings),hook,new Date().toISOString(),id);return json(res,200,{success:'true',message:'ok'});
    }
   }
-  if(action==='instance/clear'&&method==='POST'){keys(input,['token']);await transport.reset(id);return json(res,200,{success:'true',message:'ok'});}
+  if(action==='instance/clear'&&method==='POST'){keys(input,['token']);await transport.reset(id,auditContext);return json(res,200,{success:'true',message:'ok'});}
   if(action==='instance/me'&&method==='GET')return json(res,200,await transport.me(id));
-  if(['instance/restart','instance/takeover'].includes(action)&&method==='POST'){keys(input,['token']);await transport.restart(id);return json(res,200,{success:'true',message:'ok'});}
-  if(action==='instance/logout'&&method==='POST'){keys(input,['token']);await transport.disconnect(id);return json(res,200,{success:'true',message:'ok'});}
+  if(['instance/restart','instance/takeover'].includes(action)&&method==='POST'){keys(input,['token']);await transport.restart(id,auditContext);return json(res,200,{success:'true',message:'ok'});}
+  if(action==='instance/logout'&&method==='POST'){keys(input,['token']);await transport.disconnect(id,auditContext);return json(res,200,{success:'true',message:'ok'});}
   if(action==='messages'&&method==='GET')return await list(res,id,row,url);
   if(action==='messages/statistics'&&method==='GET'){
    const result={sent:0,queue:0,unsent:0,invalid:0,expired:0};for(const s of db.prepare("SELECT status,count(*) AS n FROM messages WHERE instance_id=? AND direction='out' GROUP BY status").all(id))if(Object.hasOwn(result,s.status))result[s.status]=s.n;

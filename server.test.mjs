@@ -10,6 +10,43 @@ import {openStore} from './store.mjs';
 const admin={email:'admin@example.com',password:'administrator-test-password'};
 const fakeTransport=()=>({state:()=>({status:'disconnected',qr:null}),connect:()=>{},disconnect:async()=>{},flush:()=>{},restore:()=>{},close:async()=>{}});
 
+test('security audit records real actors, sensitive actions and failures, separates integrations and protects instance scope',async t=>{
+ let emit,pendingContext;const states=new Map();
+ const app=await fixture(t,{transportFactory:(store,options)=>{emit=(id,status,metadata={})=>{states.set(id,status);options.onConnectionState(id,status,'Test connection event',metadata);};return {...fakeTransport(),state:id=>({status:states.get(id)||'disconnected',qr:null}),connect:(id,attempt,context)=>{pendingContext=context;},disconnect:async(id,context)=>emit(id,'disconnected',{source:'manual_disconnect',auditContext:context})};}});
+ const root=await login(app);
+ const account=async(name,role)=>{const credentials={email:name+'@example.com',password:name+'-long-test-password'};const user=(await app.request('/api/users',{method:'POST',cookie:root,data:{name,role,...credentials}})).body.user;return {user,cookie:await login(app,credentials)};};
+ const owner=await account('owner','user'),second=await account('second-admin','admin'),other=await account('unrelated','user');
+ const i=(await app.request('/api/instances',{method:'POST',cookie:owner.cookie,data:{name:'Owned instance'}})).body.instance;
+ const otherInstance=(await app.request('/api/instances',{method:'POST',cookie:other.cookie,data:{name:'Private other instance'}})).body.instance;
+ const ownHistory=()=>app.request('/api/instances/'+i.id+'/activity?limit=100',{cookie:owner.cookie});
+ assert.equal((await app.request('/api/general-admin/activity')).status,401);assert.equal((await app.request('/api/general-admin/activity',{cookie:owner.cookie})).status,403);assert.equal((await app.request('/api/instances/'+i.id+'/activity',{cookie:other.cookie})).status,404);
+ await app.request('/api/instances/'+i.id,{cookie:second.cookie});
+ const rawHook='https://hook-user:hook-password@hooks.example.com/secret-path?token=secret-query';
+ assert.equal((await app.request('/api/instances/'+i.id,{method:'PATCH',cookie:second.cookie,data:{name:'Updated instance',webhook_url:rawHook}})).status,200);
+ assert.equal((await app.request('/api/instances/'+i.id,{method:'PATCH',cookie:second.cookie,data:{webhook_url:'not-a-url'}})).status,400);
+ const rotated=await app.request('/api/instances/'+i.id+'/token',{method:'POST',cookie:second.cookie,data:{}});assert.equal(rotated.status,200);const newToken=rotated.body.instance.token;
+ assert.equal((await app.request('/api/instances/'+i.id+'/credential-access',{method:'POST',cookie:second.cookie,data:{action:'reveal'}})).status,200);
+ assert.equal((await app.request('/api/instances/'+i.id+'/credential-access',{method:'POST',cookie:second.cookie,data:{action:'copy'}})).status,200);
+ await app.request('/api/instances/'+i.id+'/connect',{method:'POST',cookie:second.cookie,data:{}});assert.equal(pendingContext.actor.id,second.user.id);
+ emit(i.id,'authenticated',{phone:'5511111111111',source:'whatsapp',auditContext:pendingContext});
+ await app.request('/api/instances/'+i.id+'/disconnect',{method:'POST',cookie:second.cookie,data:{}});
+ await app.request('/api/instances/'+i.id+'/connect',{method:'POST',cookie:second.cookie,data:{}});emit(i.id,'authenticated',{phone:'5522222222222',source:'whatsapp',auditContext:pendingContext});
+ emit(i.id,'disconnected',{source:'whatsapp',code:408});
+ assert.equal((await app.request('/instance'+i.id+'/instance/settings',{method:'POST',data:{token:newToken,sendDelay:4,webhook_url:rawHook}})).status,200);
+ assert.equal((await app.request('/instance'+i.id+'/messages/chat',{method:'POST',data:{token:newToken,to:'5511999999999',body:'CONFIDENTIAL_MESSAGE_BODY'}})).status,200);
+ const history=(await ownHistory()).body;assert.ok(history.events.some(e=>e.action==='instance_created'&&e.actor_id===owner.user.id));assert.ok(history.events.some(e=>e.action==='instance_viewed'&&e.actor_id===second.user.id));assert.ok(history.events.some(e=>e.action==='token_rotated'&&e.outcome==='success'&&e.actor_id===second.user.id));
+ const changed=history.events.find(e=>e.action==='instance_updated'&&e.outcome==='success');assert.equal(changed.before.name,'Owned instance');assert.equal(changed.after.name,'Updated instance');assert.equal(changed.after.webhook.origin,'https://hooks.example.com');
+ assert.ok(history.events.some(e=>e.action==='instance_updated'&&e.outcome==='failed'&&e.details.error_code==='invalid_webhook_url'));
+ const number=history.events.find(e=>e.action==='connection_number_changed');assert.equal(number.actor_id,second.user.id);assert.deepEqual(number.before,{phone:'5511111111111'});assert.deepEqual(number.after,{phone:'5522222222222'});
+ assert.ok(history.events.some(e=>e.action==='connection_lost'&&e.actor_kind==='system'&&e.details.code===408));assert.ok(history.events.some(e=>e.action==='api.instance.settings'&&e.actor_kind==='api'&&e.outcome==='success'));
+ assert.ok(history.events.some(e=>e.action==='api.messages.chat'&&e.actor_kind==='api'));assert.ok(!history.events.some(e=>e.instance_id===otherInstance.id));
+ const raw=JSON.stringify(history);for(const secret of [i.token,newToken,'hook-password','secret-path','secret-query','CONFIDENTIAL_MESSAGE_BODY'])assert.ok(!raw.includes(secret),secret);
+ const filtered=(await app.request('/api/general-admin/activity?instance_id='+i.id+'&actor_id='+second.user.id+'&action=token_rotated&outcome=success',{cookie:root})).body;assert.equal(filtered.total,1);assert.equal(filtered.events[0].actor_id,second.user.id);
+ const scoped=(await app.request('/api/instances/'+i.id+'/activity?instance_id='+otherInstance.id,{cookie:owner.cookie})).body;assert.ok(scoped.events.every(e=>e.instance_id===i.id));
+ assert.equal((await app.request('/api/general-admin/activity?from=2026-02-30',{cookie:root})).status,400);
+ const prior=(await ownHistory()).body.total;for(let n=0;n<3;n++)await app.request('/api/instances/'+i.id+'/qr',{cookie:owner.cookie});assert.equal((await ownHistory()).body.total,prior);
+});
+
 test('all admins share audited alert settings; USER and anonymous cannot access them; dashboard incidents stay scoped',async t=>{
  let change;const states=new Map(),sent=[];
  const app=await fixture(t,{alertOptions:{mailReady:()=>true,sendEmail:async input=>{sent.push(input);return {messageId:'test'};}},transportFactory:(_store,options)=>{change=(id,status)=>{states.set(id,status);options.onConnectionState(id,status,'Test connection event');};return {...fakeTransport(),state:id=>({status:states.get(id)||'disconnected',qr:null})};}});

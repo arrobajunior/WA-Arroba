@@ -72,12 +72,12 @@ export function createTransport(store, { socketFactory=makeWASocket, retryDelay=
       set:async(data)=>{if(!valid())return;db.exec('BEGIN');try{for(const [type,values] of Object.entries(data))for(const [key,value] of Object.entries(values))write(type,key,value);db.exec('COMMIT');}catch(e){db.exec('ROLLBACK');throw e;}}
     }},save:()=>write('creds','main',creds)};
   }
-  function connect(id,attempt=0) {
+  function connect(id,attempt=0,auditContext=null) {
     if(closed)throw new Error('Aplicação em encerramento.');
     const previous=entries.get(id);
     if(previous&&['initialize','qr','authenticated','retrying','disconnecting'].includes(previous.status)&&!attempt)return state(id);
     if(previous){clearTimeout(previous.timer);previous.socket?.end(new Error('Substituição controlada da conexão.'));}
-    const e={status:'initialize',qr:null,error:null,socket:null,timer:null,contacts:new Map(),chats:new Map(),messages:new Map(),webhooked:new Map(),invalidContacts:new Map()};entries.set(id,e);
+    const e={status:'initialize',qr:null,error:null,socket:null,timer:null,auditContext,contacts:new Map(),chats:new Map(),messages:new Map(),webhooked:new Map(),invalidContacts:new Map()};entries.set(id,e);
     const valid=()=>!closed&&entries.get(id)===e;
     const credentials=auth(id,valid);
     if(attempt>0)notify(id,'retrying','Tentativa automática de reconexão.',{source:'whatsapp',reconnectAttempt:attempt});
@@ -116,12 +116,12 @@ export function createTransport(store, { socketFactory=makeWASocket, retryDelay=
       e.socket.ev.on('creds.update',()=>{if(valid())credentials.save();});
       e.socket.ev.on('connection.update',update=>{
         if(!valid())return;
-        if(update.qr){e.qr=update.qr;e.status='qr';notify(id,'qr','A sessão precisa de uma nova leitura do QR Code.',{source:'whatsapp',reconnectAttempt:attempt});}
+        if(update.qr){e.qr=update.qr;e.status='qr';notify(id,'qr','A sessão precisa de uma nova leitura do QR Code.',{source:'whatsapp',reconnectAttempt:attempt,auditContext:e.auditContext});}
         if(update.connection==='open'){
           e.status='authenticated';e.qr=null;e.error=null;attempt=0;
           const phone=(e.socket.user?.id||'').split(':')[0].split('@')[0];
           db.prepare('UPDATE instances SET phone=?,updated_at=? WHERE id=?').run(phone,new Date().toISOString(),id);
-          notify(id,'authenticated',undefined,{source:'whatsapp'});
+          notify(id,'authenticated',undefined,{source:'whatsapp',phone,auditContext:e.auditContext});e.auditContext=null;
           flush(id);
         }
         if(update.connection==='close') {
@@ -132,7 +132,7 @@ export function createTransport(store, { socketFactory=makeWASocket, retryDelay=
           if(reason===DisconnectReason.loggedOut){db.prepare('DELETE FROM wa_keys WHERE instance_id=?').run(id);db.prepare('UPDATE instances SET auto_connect=0 WHERE id=?').run(id);e.status='disconnected';e.error='Sessão encerrada no WhatsApp. Gere um novo QR Code.';return;}
           if(reason===DisconnectReason.connectionReplaced||attempt>=5){e.status='disconnected';e.error=reason===DisconnectReason.connectionReplaced?'Conexão substituída por outra sessão.':'Não foi possível reconectar. Tente conectar novamente.';db.prepare('UPDATE instances SET auto_connect=0 WHERE id=?').run(id);return;}
           e.status='retrying';
-          e.timer=setTimeout(()=>{if(valid()){e.status='disconnected';connect(id,attempt+1);}},reason===DisconnectReason.restartRequired?500:Math.min(retryDelay*2**attempt,30000));e.timer.unref();
+          e.timer=setTimeout(()=>{if(valid()){e.status='disconnected';connect(id,attempt+1,e.auditContext);}},reason===DisconnectReason.restartRequired?500:Math.min(retryDelay*2**attempt,30000));e.timer.unref();
         }
       });
       e.socket.ev.on('messages.update',updates=>{
@@ -240,7 +240,7 @@ export function createTransport(store, { socketFactory=makeWASocket, retryDelay=
   const required=id=>{const e=entries.get(id);if(e?.status!=='authenticated')throw Object.assign(new Error('WhatsApp não está conectado.'),{status:409,code:'not_authenticated'});return e;};
   const checkedJid=value=>{if(typeof value!=='string'||!/^\+?\d[0-9-]*(?:@(c\.us|g\.us|s\.whatsapp\.net|lid))?$/.test(value))throw Object.assign(new Error('chatId inválido.'),{status:400,code:'invalid_chat'});return whatsappJid(value);};
   async function me(id){const e=required(id),user=e.socket.user||{},jid=publicJid(user.id||'');let image='';try{image=await e.socket.profilePictureUrl(whatsappJid(jid),'image');}catch{}return {id:jid,name:user.name||user.verifiedName||'',number:jid.split('@')[0],image};}
-  async function restart(id){const e=entries.get(id);if(e){entries.delete(id);clearTimeout(e.timer);e.wake?.();e.socket?.end(new Error('Reinício solicitado.'));}await work.get(id);return connect(id);}
+  async function restart(id,auditContext=null){const e=entries.get(id);if(e){entries.delete(id);clearTimeout(e.timer);e.wake?.();e.socket?.end(new Error('Reinício solicitado.'));}await work.get(id);return connect(id,0,auditContext);}
   function messageKey(e,msgId){
     const found=e.messages.get(msgId)||[...e.messages.values()].find(m=>webhookId(m.key.remoteJid,m.key.id,m.key.fromMe)===msgId);
     let key=found?.key;
@@ -287,19 +287,19 @@ export function createTransport(store, { socketFactory=makeWASocket, retryDelay=
     }
     throw Object.assign(new Error('Operação não implementada.'),{status:501,code:'not_implemented'});
   }
-  async function reset(id){
-    const e=entries.get(id);if(e?.status==='authenticated')await disconnect(id);
+  async function reset(id,auditContext=null){
+    const e=entries.get(id);if(e?.status==='authenticated')await disconnect(id,auditContext);
     else if(e){entries.delete(id);clearTimeout(e.timer);e.wake?.();e.socket?.end(new Error('Reset solicitado.'));}
     await work.get(id);
     db.exec('BEGIN');try{db.prepare('DELETE FROM messages WHERE instance_id=?').run(id);db.prepare('DELETE FROM wa_keys WHERE instance_id=?').run(id);db.prepare("UPDATE instances SET settings='{}',webhook_url='',phone='',auto_connect=0 WHERE id=?").run(id);db.exec('COMMIT');}catch(error){db.exec('ROLLBACK');throw error;}
-    mediaRelay.removeInstance(id);return connect(id);
+    mediaRelay.removeInstance(id);return connect(id,0,auditContext);
   }
-  async function disconnect(id) {
+  async function disconnect(id,auditContext=null) {
     const e=entries.get(id);
     if(!e?.socket||e.status==='disconnected')throw Object.assign(new Error('A instância já está desconectada.'),{status:409,code:'not_authenticated'});
     const old=e.status;e.status='disconnecting';e.qr=null;clearTimeout(e.timer);
     try{if(e.credentials.creds.registered)await e.socket.logout();}catch{e.status=old;throw new Error('Não foi possível confirmar o logout no WhatsApp. Tente novamente.');}
-    notify(id,'disconnected','A instância foi desconectada pelo painel ou pela API.',{source:'manual_disconnect'});
+    notify(id,'disconnected','A instância foi desconectada pelo painel ou pela API.',{source:'manual_disconnect',auditContext});
     entries.delete(id);e.wake?.();e.socket.end(new Error('Logout solicitado.'));
     db.prepare('DELETE FROM wa_keys WHERE instance_id=?').run(id);db.prepare('UPDATE instances SET auto_connect=0,phone=? WHERE id=?').run('',id);
   }

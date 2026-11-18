@@ -41,3 +41,16 @@
 - Resumos e recorrências por instância, motivo/código e horário usam todo o filtro, não apenas a página. São frequências observadas, não diagnóstico automático de causa.
 - Registros anteriores são preservados e identificados como históricos limitados: nomes/números são recuperados do cadastro disponível e horários/códigos ausentes permanecem não registrados.
 - Validação: 46 testes automatizados aprovados; verificação DOM local passou para filtros, detalhes, linha do tempo SMTP, paginação e recuperação. Nenhum canal real foi desconectado para teste e nenhum e-mail real de teste foi enviado nesta mudança.
+
+## 18/11/2026 — Auditoria de ações por instância e central
+- Criada aba Histórico e segurança por instância e card central na Administração Geral.
+- Registro de criação, acesso aos dados/credenciais, consulta de mensagens, pedidos de exibição/cópia do token, renovação do token, alterações de nome/webhook e solicitações de conexão/desconexão.
+- Configuração/teste de e-mail geral entram também no log central; operações POST autenticadas da API compatível registram comando, instância e resultado sem conteúdo/tokens. QR via API que inicia conexão também é rastreado.
+- Eventos automáticos registram QR, quedas, tentativas e confirmação de conexão. Troca de número confirmado preserva o anterior mesmo após logout/reset.
+- Autoria é da sessão real no painel. API com token é integração (não o proprietário humano); eventos automáticos não reutilizam autoria de admin.
+- Correlacionada a confirmação ao pedido de conexão quando existe contexto explícito no processo; contexto é apagado após confirmar. Isso identifica quem solicitou a conexão, sem afirmar quem fisicamente leu o QR; após reiniciar, não inventa autoria perdida.
+- Log preserva snapshots de pessoa/instância, data em Brasília na interface, ação, resultado, valores anteriores/novos seguros, origem, correlação e IP da conexão (que pode ser proxy).
+- Tabela com triggers de proteção contra UPDATE/DELETE e sem rotina de limpeza pela aplicação. Reset de instância preserva auditoria. Acesso USER fica restrito à própria instância; ADMIN consulta o central.
+- Migração única importa criação/data original, quedas/recuperações existentes e auditoria anterior de e-mail. Autorias ausentes continuam desconhecidas; não atribui ao dono atual.
+- Webhook registra somente origem e SHA-256 da URL, sem senha, rota ou parâmetros; tokens antigos/novos nunca são gravados.
+- Validação: 52 testes automatizados aprovados; DOM local verificou aba por instância, solicitação de token, renovação, filtros globais, identificação do executor, paginação e manutenção do histórico de quedas. Não houve envio real de e-mail nem desconexão de canal real para testar.

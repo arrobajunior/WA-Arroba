@@ -54,3 +54,16 @@ Não foi feita atualização da biblioteca Baileys.
 - [x] Implantação SMTP 0333f587 confirmada como SUCCESS antes desta alteração.
 - [ ] Confirmar implantação desta expansão no Railway e homologar com ocorrências reais futuras; os novos detalhes técnicos só existem a partir desta versão.
 - [ ] Homologar autenticação SMTP/entrega usando o destinatário configurado, sem inventar confirmação a partir do cadastro de variáveis.
+
+## Auditoria de atividades — ponto de retomada
+- [x] Aba por instância e log central paginados, com filtros por pessoa/ação/resultado/data/origem da autoria.
+- [x] Criação/acesso/configuração/token e solicitações de conexão/desconexão auditados no servidor.
+- [x] Integrações autenticadas e eventos automáticos identificados separadamente de usuários.
+- [x] Confirmação de número e troca do número conectado, com anterior/novo e correlação explícita com a solicitação quando disponível.
+- [x] Logs não incluem valores de tokens, senhas, QR, mensagens ou URL completa de webhook.
+- [x] Registros protegidos contra edição/exclusão pela aplicação e preservados em reset/reinício.
+- [x] Migração histórica sem inventar autoria, permissões e isolamento de filtros USER verificados.
+- [x] 52 testes aprovados e interface verificada em DOM local.
+- [x] Implantação anterior 6c791cf do histórico de quedas confirmada como SUCCESS.
+- [ ] Confirmar implantação desta auditoria no Railway e validar no painel com ações reais autorizadas. Não desconectar instâncias de produção apenas para testar.
+- [ ] Homologação SMTP/entrega real continua dependendo do destinatário e botão de teste já existentes; cadastro de variáveis não comprova entrega.

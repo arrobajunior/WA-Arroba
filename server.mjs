@@ -13,6 +13,7 @@ import { passwordHash,passwordValid,digest,equal,sessionToken,publicUser } from 
 import { createTransport } from './transport.mjs';
 import {createConnectionAlerts} from './connection-alerts.mjs';
 import {createIncidentHistory} from './incident-history.mjs';
+import {createInstanceActivity} from './instance-activity.mjs';
 
 const directory=path.dirname(fileURLToPath(import.meta.url));
 const fail=(status,code,message)=>Object.assign(new Error(message),{status,code});
@@ -45,15 +46,17 @@ export async function createApp({dataDir=path.join(directory,'.data'),port=3210,
   const mediaBaseUrl=publicOrigin||`http://127.0.0.1:${port}`;
   const alerts=createConnectionAlerts(store,{publicUrl:publicOrigin,appName:()=>branding.read().name,...alertOptions});
   const incidentHistory=createIncidentHistory(db);
-  const transport=transportFactory(store,{mediaBaseUrl,mediaRelay,legacyStorage:legacy,onConnectionState:alerts.stateChanged}),attempts=new Map();
+  const activity=createInstanceActivity(db);
+  const transport=transportFactory(store,{mediaBaseUrl,mediaRelay,legacyStorage:legacy,onConnectionState:(...args)=>{activity.connectionState(...args);alerts.stateChanged(...args);}}),attempts=new Map();
   const dummyHash=await passwordHash(randomBytes(32).toString('hex'));
   const secure=publicOrigin?.startsWith('https:');
   const cookie=(token,maxAge)=>`wa_session=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${secure?'; Secure':''}`;
   const lookup=id=>{const row=db.prepare('SELECT * FROM instances WHERE id=?').get(id);if(!row)throw fail(404,'not_found','Instância não encontrada.');return row;};
-  const authorize=(user,row)=>{if(user.role!=='admin'&&user.id!==row.owner_id)throw fail(404,'not_found','Instância não encontrada.');};
+  const authorize=(user,row)=>{if(user.role!=='admin'&&user.id!==row.owner_id){activity.record({instance:row,actor:activity.userActor(user),action:'instance_access_denied',outcome:'denied',source:'panel'});throw fail(404,'not_found','Instância não encontrada.');}};
+  const audited=(user,req,row,action,before,operation,after)=>activity.run({instance:row,actor:activity.userActor(user),action,before,source:'panel',peer_ip:req.socket.remoteAddress||''},operation,after);
   const counts=id=>{const result={total:0,queue:0,sent:0,unsent:0,unknown:0,sending:0};for(const r of db.prepare('SELECT status,count(*) AS n FROM messages WHERE instance_id=? GROUP BY status').all(id)){result[r.status]=r.n;result.total+=r.n;}return result;};
   const serialize=(row,secret=false)=>({id:row.id,name:row.name,phone:row.phone,owner_id:row.owner_id,owner_name:db.prepare('SELECT name FROM users WHERE id=?').get(row.owner_id)?.name,created_at:row.created_at,status:transport.state(row.id).status,error:transport.state(row.id).error,first_connected_at:row.first_connected_at,last_connected_at:row.last_connected_at,connection_alert:db.prepare('SELECT id,opened_at,reason,notification_status FROM connection_incidents WHERE instance_id=? AND resolved_at IS NULL').get(row.id)||null,message_counts:counts(row.id),webhook_url:row.webhook_url||'',...(secret?{token:decrypt(row.token)}:{})});
-  const compatibility=createCompatibilityApi({store:{...store,equalToken:equal},transport,relay:mediaRelay,baseUrl:mediaBaseUrl,legacy,json,fail,text,keys,body,webhookUrl});
+  const compatibility=createCompatibilityApi({store:{...store,equalToken:equal},transport,relay:mediaRelay,baseUrl:mediaBaseUrl,legacy,json,fail,text,keys,body,webhookUrl,activity});
   let shuttingDown=false;
   const server=http.createServer(async(req,res)=>{
     res.setHeader('Cache-Control','no-store');res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','no-referrer');
@@ -102,6 +105,7 @@ export async function createApp({dataDir=path.join(directory,'.data'),port=3210,
         if(pathname==='/api/auth/logout'&&method==='POST'){db.prepare('DELETE FROM sessions WHERE id=?').run(digest(sessionToken(req)));res.setHeader('Set-Cookie',cookie('',0));return json(res,200,{ok:true});}
         if(pathname.startsWith('/api/general-admin')){
           if(session.role!=='admin')throw fail(403,'forbidden','Acesso administrativo necessário.');
+          if(pathname==='/api/general-admin/activity'&&method==='GET')return json(res,200,activity.list(url.searchParams));
           if(pathname==='/api/general-admin/incidents'&&method==='GET')return json(res,200,incidentHistory.list(url.searchParams));
           const incidentMatch=pathname.match(/^\/api\/general-admin\/incidents\/(\d+)$/);
           if(incidentMatch&&method==='GET')return json(res,200,incidentHistory.detail(incidentMatch[1],url.searchParams));
@@ -111,9 +115,10 @@ export async function createApp({dataDir=path.join(directory,'.data'),port=3210,
             // A single plain address, never SMTP headers, lists or display names.
             const raw=text(input.alert_email,'email de alerta',254).trim();
             if(!/^[A-Za-z0-9.!#$%&'*+\/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+$/.test(raw))throw fail(400,'invalid_email','Informe um único endereço de e-mail válido.');
-            return json(res,200,{settings:alerts.updateEmail(session,raw)});
+            const saved=await audited(session,req,null,'alert_email_updated',{alert_email:alerts.settings().alert_email},()=>alerts.updateEmail(session,raw),result=>({alert_email:result.alert_email}));
+            return json(res,200,{settings:saved});
           }
-          if(pathname==='/api/general-admin/test-email'&&method==='POST'){keys(await body(req),[]);await alerts.sendTest(session);return json(res,200,{ok:true});}
+          if(pathname==='/api/general-admin/test-email'&&method==='POST'){keys(await body(req),[]);await audited(session,req,null,'alert_email_test',{},()=>alerts.sendTest(session));return json(res,200,{ok:true});}
           throw fail(404,'not_found','Endpoint não encontrado.');
         }
         if(pathname==='/api/users') {
@@ -162,7 +167,11 @@ export async function createApp({dataDir=path.join(directory,'.data'),port=3210,
           if(typeof owner!=='string'||!db.prepare('SELECT id FROM users WHERE id=? AND active=1').get(owner))throw fail(400,'invalid_owner','Usuário não encontrado.');
           if(db.prepare('SELECT count(*) AS n FROM instances WHERE owner_id=?').get(owner).n>=50)throw fail(409,'instance_limit','Limite de 50 instâncias por usuário nesta versão.');
           const id=randomBytes(4).toString('hex'),now=new Date().toISOString();
-          db.prepare('INSERT INTO instances(id,name,phone,token,settings,created_at,updated_at,owner_id,token_encrypted,auto_connect) VALUES(?,?,?,?,?,?,?,?,1,0)').run(id,name,'',encrypt(randomBytes(32).toString('hex')),'{}',now,now,owner);
+          db.exec('BEGIN');try{
+            db.prepare('INSERT INTO instances(id,name,phone,token,settings,created_at,updated_at,owner_id,token_encrypted,auto_connect) VALUES(?,?,?,?,?,?,?,?,1,0)').run(id,name,'',encrypt(randomBytes(32).toString('hex')),'{}',now,now,owner);
+            activity.record({instance:{id,name},actor:activity.userActor(session),action:'instance_created',outcome:'success',source:'panel',after:{name,owner_id:owner},peer_ip:req.socket.remoteAddress||''});
+            db.exec('COMMIT');
+          }catch(error){db.exec('ROLLBACK');throw error;}
           return json(res,201,{instance:serialize(lookup(id),true)});
         }
         if(['/api/instances','/api/dashboard'].includes(pathname)&&method==='GET'){
@@ -171,24 +180,28 @@ export async function createApp({dataDir=path.join(directory,'.data'),port=3210,
           if(pathname==='/api/instances')return json(res,200,{instances:items});
           const c={instances:items.length,connected:0,queue:0,sent:0,messages:0,alerts:0};for(const i of items){if(i.connection_alert)c.alerts++;if(i.status==='authenticated')c.connected++;c.queue+=i.message_counts.queue;c.sent+=i.message_counts.sent;c.messages+=i.message_counts.total;}return json(res,200,{counts:c,instances:items});
         }
-        const match=pathname.match(/^\/api\/instances\/([a-f0-9]{8})(?:\/(qr|connect|disconnect|token|messages))?$/);
+        const match=pathname.match(/^\/api\/instances\/([a-f0-9]{8})(?:\/(qr|connect|disconnect|token|messages|activity|credential-access))?$/);
         if(match){const [,id,action]=match,row=lookup(id);authorize(session,row);
-          if(!action&&method==='GET')return json(res,200,{instance:serialize(row,true)});
-          if(!action&&method==='PATCH'){
-            const input=await body(req);keys(input,['name','webhook_url']);
-            const sets=[],args=[];
-            if('name'in input){sets.push('name=?');args.push(text(input.name,'nome',120).trim());}
-            if('webhook_url'in input){sets.push('webhook_url=?');args.push(webhookUrl(input.webhook_url));}
-            if(!sets.length)throw fail(400,'invalid_field','Informe ao menos um campo para atualizar.');
-            sets.push('updated_at=?');args.push(new Date().toISOString(),id);
-            db.prepare(`UPDATE instances SET ${sets.join(',')} WHERE id=?`).run(...args);
-            return json(res,200,{instance:serialize(lookup(id),true)});
+          if(!action&&method==='GET'){activity.record({instance:row,actor:activity.userActor(session),action:'instance_viewed',outcome:'observed',source:'panel',details:{credentials_included:true},peer_ip:req.socket.remoteAddress||''});return json(res,200,{instance:serialize(row,true)});}
+          if(action==='activity'&&method==='GET')return json(res,200,activity.list(url.searchParams,id));
+          if(action==='credential-access'&&method==='POST'){
+            const input=await body(req);keys(input,['action']);if(!['reveal','copy'].includes(input.action))throw fail(400,'invalid_field','Ação inválida.');
+            activity.record({instance:row,actor:activity.userActor(session),action:input.action==='copy'?'token_copy_requested':'token_reveal_requested',outcome:'requested',source:'panel',peer_ip:req.socket.remoteAddress||''});return json(res,200,{ok:true});
           }
-          if(action==='token'&&method==='POST'){keys(await body(req),[]);db.prepare('UPDATE instances SET token=? WHERE id=?').run(encrypt(randomBytes(32).toString('hex')),id);return json(res,200,{instance:serialize(lookup(id),true)});}
-          if(action==='connect'&&method==='POST'){keys(await body(req),[]);transport.connect(id);return json(res,202,{instance:serialize(row,true)});}
-          if(action==='disconnect'&&method==='POST'){keys(await body(req),[]);await transport.disconnect(id);return json(res,200,{instance:serialize(lookup(id),true)});}
+          if(!action&&method==='PATCH'){
+            const updated=await audited(session,req,row,'instance_updated',activity.snapshot(row),async()=>{
+              const input=await body(req);keys(input,['name','webhook_url']);const sets=[],args=[];
+              if('name'in input){sets.push('name=?');args.push(text(input.name,'nome',120).trim());}
+              if('webhook_url'in input){sets.push('webhook_url=?');args.push(webhookUrl(input.webhook_url));}
+              if(!sets.length)throw fail(400,'invalid_field','Informe ao menos um campo para atualizar.');
+              sets.push('updated_at=?');args.push(new Date().toISOString(),id);db.prepare(`UPDATE instances SET ${sets.join(',')} WHERE id=?`).run(...args);return lookup(id);
+            },activity.snapshot);return json(res,200,{instance:serialize(updated,true)});
+          }
+          if(action==='token'&&method==='POST'){await audited(session,req,row,'token_rotated',{},async()=>{keys(await body(req),[]);db.prepare('UPDATE instances SET token=? WHERE id=?').run(encrypt(randomBytes(32).toString('hex')),id);},()=>({token_rotated:true}));return json(res,200,{instance:serialize(lookup(id),true)});}
+          if(action==='connect'&&method==='POST'){await audited(session,req,row,'connection_requested',{},async context=>{keys(await body(req),[]);transport.connect(id,0,context);});return json(res,202,{instance:serialize(row,true)});}
+          if(action==='disconnect'&&method==='POST'){await audited(session,req,row,'disconnection_requested',{},async context=>{keys(await body(req),[]);await transport.disconnect(id,context);});return json(res,200,{instance:serialize(lookup(id),true)});}
           if(action==='qr'&&method==='GET'){const s=transport.state(id);return json(res,200,{status:s.status,error:s.error,qr:s.qr?await QRCode.toDataURL(s.qr,{width:280,margin:2}):null});}
-          if(action==='messages'&&method==='GET')return await listMessages(res,id,url);
+          if(action==='messages'&&method==='GET'){activity.record({instance:row,actor:activity.userActor(session),action:'messages_viewed',outcome:'observed',source:'panel',peer_ip:req.socket.remoteAddress||''});return await listMessages(res,id,url);}
         }
         throw fail(404,'not_found','Endpoint não encontrado.');
       }

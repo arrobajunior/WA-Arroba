@@ -7,8 +7,17 @@ import path from 'node:path';
 import {openStore} from './store.mjs';
 import {createMediaRelay} from './media-relay.mjs';
 import {createTransport} from './transport.mjs';
+import {createInstanceActivity} from './instance-activity.mjs';
 async function setup(t,extra={}){const dir=await mkdtemp(path.join(tmpdir(),'wa-transport-test-'));const store=openStore(dir),sockets=[];store.db.prepare('INSERT INTO users(id,name,email,password_hash,role,created_at) VALUES(?,?,?,?,?,?)').run('owner','Owner','owner@example.com','unused','user','now');store.db.prepare('INSERT INTO instances(id,name,token,created_at,updated_at) VALUES(?,?,?,?,?)').run('abcd1234','test',store.encrypt('token'),'now','now');store.db.prepare('UPDATE instances SET owner_id=?').run('owner');const transport=createTransport(store,{socketFactory:config=>{const s={ev:new EventEmitter(),user:{id:'5511999999999:1@s.whatsapp.net'},config,end(){},logout:async()=>{},sendMessage:async()=>({}),updateMediaMessage:async()=>{}};sockets.push(s);return s;},retryDelay:5,...extra});t.after(async()=>{await transport.close();store.close();await rm(dir,{recursive:true,force:true});});return {store,transport,sockets,dir};}
 const tick=()=>new Promise(r=>setTimeout(r,20));
+test('connection audit context survives pairing retries and is cleared after confirmation',async t=>{
+ const transitions=[],context={instance_id:'abcd1234',request_id:'request-test',actor:{id:'admin',kind:'user'}};
+ const {transport,sockets}=await setup(t,{retryDelay:5,onConnectionState:(...args)=>transitions.push(args)});
+ transport.connect('abcd1234',0,context);sockets[0].ev.emit('connection.update',{qr:'private-qr'});assert.equal(transitions.at(-1)[3].auditContext,context);
+ sockets[0].ev.emit('connection.update',{connection:'close',lastDisconnect:{error:{output:{statusCode:408}}}});await tick();assert.equal(sockets.length,2);
+ sockets[1].ev.emit('connection.update',{connection:'open'});assert.equal(transitions.at(-1)[3].auditContext,context);assert.equal(transitions.at(-1)[3].phone,'5511999999999');
+ sockets[1].ev.emit('connection.update',{connection:'open'});assert.equal(transitions.at(-1)[3].auditContext,null);
+});
 test('connection lifecycle emits alert transitions for real closes and logout, while process shutdown stays silent',async t=>{
  const transitions=[];const {transport,sockets}=await setup(t,{retryDelay:100000,onConnectionState:(...args)=>transitions.push(args)});
  transport.connect('abcd1234');const first=sockets[0];first.ev.emit('connection.update',{qr:'test'});first.ev.emit('connection.update',{connection:'open'});
@@ -174,12 +183,14 @@ test('URL media can be retried after memory loss and ACKs never downgrade',async
 
 test('instance reset clears its own state, preserves other instances and reopens QR connection',async t=>{
  const relay=createMediaRelay(),{store,transport,sockets}=await setup(t,{mediaRelay:relay});
+ createInstanceActivity(store.db).record({instance:{id:'abcd1234',name:'test'},action:'token_rotated',outcome:'success'});
  store.db.prepare('INSERT INTO instances(id,name,token,created_at,updated_at,owner_id) VALUES(?,?,?,?,?,?)').run('eeeeffff','Other',store.encrypt('other'),'now','now','owner');
  store.db.prepare('INSERT INTO messages(id,instance_id,recipient,body,type,status,ack,created_at) VALUES(?,?,?,?,?,?,?,?)').run('owned','abcd1234','5511888888888','body','chat','sent','device','now');
  store.db.prepare('INSERT INTO messages(id,instance_id,recipient,body,type,status,ack,created_at) VALUES(?,?,?,?,?,?,?,?)').run('other','eeeeffff','5511888888888','body','chat','sent','device','now');
  store.db.prepare('UPDATE instances SET webhook_url=?,settings=? WHERE id=?').run('https://example.com/hook','{"sendDelay":10}','abcd1234');
  const key=relay.put('abcd1234',Buffer.from('media'),'image/png');transport.connect('abcd1234');sockets[0].ev.emit('connection.update',{qr:'qr'});
  await transport.reset('abcd1234');assert.equal(sockets.length,2);assert.equal(transport.state('abcd1234').status,'initialize');assert.equal(relay.get('abcd1234',key),null);
+ assert.equal(store.db.prepare('SELECT count(*) AS n FROM instance_activity WHERE instance_id=?').get('abcd1234').n,1);
  assert.equal(store.db.prepare('SELECT count(*) AS n FROM messages WHERE instance_id=?').get('abcd1234').n,0);assert.equal(store.db.prepare('SELECT count(*) AS n FROM messages WHERE instance_id=?').get('eeeeffff').n,1);assert.equal(store.db.prepare('SELECT webhook_url FROM instances WHERE id=?').get('abcd1234').webhook_url,'');
 });
 

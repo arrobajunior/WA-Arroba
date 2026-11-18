@@ -67,6 +67,28 @@ export function openStore(directory) {
     CREATE INDEX IF NOT EXISTS connection_incident_time ON connection_incidents(opened_at,id);
     CREATE TABLE IF NOT EXISTS connection_incident_events(id INTEGER PRIMARY KEY AUTOINCREMENT,incident_id INTEGER NOT NULL REFERENCES connection_incidents(id),created_at TEXT NOT NULL,kind TEXT NOT NULL,details TEXT NOT NULL DEFAULT '{}');
     CREATE INDEX IF NOT EXISTS connection_incident_event_order ON connection_incident_events(incident_id,id);`);
+  if(!columns('instances').includes('last_connected_phone')){db.exec("ALTER TABLE instances ADD COLUMN last_connected_phone TEXT NOT NULL DEFAULT ''");db.exec("UPDATE instances SET last_connected_phone=phone WHERE phone<>''");}
+  db.exec('CREATE TABLE IF NOT EXISTS schema_migrations(name TEXT PRIMARY KEY)');
+  const hasActivity=Boolean(db.prepare("SELECT name FROM schema_migrations WHERE name='instance_activity_v1'").get());
+  db.exec(`CREATE TABLE IF NOT EXISTS instance_activity(id INTEGER PRIMARY KEY AUTOINCREMENT,created_at TEXT NOT NULL,instance_id TEXT,instance_name TEXT NOT NULL DEFAULT '',actor_id TEXT NOT NULL DEFAULT '',actor_name TEXT NOT NULL,actor_email TEXT NOT NULL DEFAULT '',actor_role TEXT NOT NULL DEFAULT '',actor_kind TEXT NOT NULL,action TEXT NOT NULL,outcome TEXT NOT NULL,source TEXT NOT NULL,request_id TEXT NOT NULL DEFAULT '',before_value TEXT NOT NULL DEFAULT '{}',after_value TEXT NOT NULL DEFAULT '{}',details TEXT NOT NULL DEFAULT '{}',peer_ip TEXT NOT NULL DEFAULT '',legacy_key TEXT UNIQUE);
+    CREATE INDEX IF NOT EXISTS instance_activity_time ON instance_activity(created_at,id);
+    CREATE INDEX IF NOT EXISTS instance_activity_instance ON instance_activity(instance_id,id);
+    CREATE INDEX IF NOT EXISTS instance_activity_actor ON instance_activity(actor_id,id);
+    CREATE TRIGGER IF NOT EXISTS instance_activity_no_update BEFORE UPDATE ON instance_activity BEGIN SELECT RAISE(ABORT,'Activity entries cannot be updated'); END;
+    CREATE TRIGGER IF NOT EXISTS instance_activity_no_delete BEFORE DELETE ON instance_activity BEGIN SELECT RAISE(ABORT,'Activity entries cannot be deleted'); END;`);
+  if(!hasActivity){
+    db.exec('BEGIN');try{
+      const insert=db.prepare('INSERT INTO instance_activity(created_at,instance_id,instance_name,actor_name,actor_kind,action,outcome,source,details,legacy_key) VALUES(?,?,?,?,?,?,?,?,?,?)');
+      for(const row of db.prepare('SELECT id,name,created_at FROM instances').all())insert.run(row.created_at,row.id,row.name,'Autoria não registrada','legacy','instance_created','observed','migration',JSON.stringify({historical:true}),'created:'+row.id);
+      for(const row of db.prepare('SELECT * FROM connection_incidents').all()){
+        insert.run(row.opened_at,row.instance_id,row.instance_name,'Sistema · registro anterior','legacy','connection_lost','observed','migration',JSON.stringify({historical:true,incident_id:row.id,reason:row.reason,code:row.disconnect_code}),'outage:'+row.id);
+        if(row.resolved_at)insert.run(row.resolved_at,row.instance_id,row.instance_name,'Sistema · registro anterior','legacy','connection_established','observed','migration',JSON.stringify({historical:true,incident_id:row.id}),'recovered:'+row.id);
+      }
+      for(const row of db.prepare('SELECT * FROM admin_audit').all())db.prepare('INSERT INTO instance_activity(created_at,actor_id,actor_name,actor_email,actor_role,actor_kind,action,outcome,source,before_value,after_value,details,legacy_key) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)').run(row.created_at,row.actor_id,row.actor_name,row.actor_email,'admin','user',row.action,row.action.endsWith('_failed')?'failed':row.action.endsWith('_requested')?'requested':'success','migration',row.before_value,row.after_value,JSON.stringify({historical:true}),'admin:'+row.id);
+      db.prepare('INSERT INTO schema_migrations(name) VALUES(?)').run('instance_activity_v1');
+      db.exec('COMMIT');
+    }catch(e){db.exec('ROLLBACK');throw e;}
+  }
   if(!columns('users').includes('is_master')){
     db.exec("ALTER TABLE users ADD COLUMN is_master INTEGER NOT NULL DEFAULT 0");
     db.exec("UPDATE users SET is_master=1,active=1 WHERE id=(SELECT id FROM users WHERE role='admin' ORDER BY created_at,id LIMIT 1)");
