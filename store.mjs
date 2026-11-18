@@ -53,6 +53,20 @@ export function openStore(directory) {
     CREATE INDEX IF NOT EXISTS connection_incident_pending ON connection_incidents(notification_status,next_attempt_at);
     CREATE TRIGGER IF NOT EXISTS admin_audit_no_update BEFORE UPDATE ON admin_audit BEGIN SELECT RAISE(ABORT,'Audit entries cannot be updated'); END;
     CREATE TRIGGER IF NOT EXISTS admin_audit_no_delete BEFORE DELETE ON admin_audit BEGIN SELECT RAISE(ABORT,'Audit entries cannot be deleted'); END;`);
+  for(const [name,definition] of [
+    ['instance_name',"TEXT NOT NULL DEFAULT ''"],['instance_phone',"TEXT NOT NULL DEFAULT ''"],['owner_name',"TEXT NOT NULL DEFAULT ''"],
+    ['source',"TEXT NOT NULL DEFAULT 'unknown'"],['disconnect_code','INTEGER'],['last_event_at','TEXT'],['reconnect_attempts','INTEGER NOT NULL DEFAULT 0'],
+    ['last_connected_at','TEXT'],['email_sent_at','TEXT'],['capture_version',"TEXT NOT NULL DEFAULT 'legacy'"],['deployment_id',"TEXT NOT NULL DEFAULT ''"],['app_commit',"TEXT NOT NULL DEFAULT ''"]
+  ])if(!columns('connection_incidents').includes(name))db.exec(`ALTER TABLE connection_incidents ADD COLUMN ${name} ${definition}`);
+  // Older incidents retain their original timestamps; reconstructed names are marked legacy.
+  db.exec(`UPDATE connection_incidents SET
+    instance_name=COALESCE((SELECT name FROM instances WHERE id=instance_id),''),
+    instance_phone=COALESCE((SELECT phone FROM instances WHERE id=instance_id),''),
+    owner_name=COALESCE((SELECT u.name FROM users u JOIN instances i ON i.owner_id=u.id WHERE i.id=instance_id),'')
+    WHERE capture_version='legacy' AND instance_name='';
+    CREATE INDEX IF NOT EXISTS connection_incident_time ON connection_incidents(opened_at,id);
+    CREATE TABLE IF NOT EXISTS connection_incident_events(id INTEGER PRIMARY KEY AUTOINCREMENT,incident_id INTEGER NOT NULL REFERENCES connection_incidents(id),created_at TEXT NOT NULL,kind TEXT NOT NULL,details TEXT NOT NULL DEFAULT '{}');
+    CREATE INDEX IF NOT EXISTS connection_incident_event_order ON connection_incident_events(incident_id,id);`);
   if(!columns('users').includes('is_master')){
     db.exec("ALTER TABLE users ADD COLUMN is_master INTEGER NOT NULL DEFAULT 0");
     db.exec("UPDATE users SET is_master=1,active=1 WHERE id=(SELECT id FROM users WHERE role='admin' ORDER BY created_at,id LIMIT 1)");

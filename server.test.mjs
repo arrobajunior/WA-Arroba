@@ -19,6 +19,7 @@ test('all admins share audited alert settings; USER and anonymous cannot access 
  assert.equal((await app.request('/api/general-admin')).status,401);
  for(const method of ['GET','PATCH'])assert.equal((await app.request('/api/general-admin',{method,cookie:alice.cookie,...(method==='PATCH'?{data:{alert_email:'bad@example.com'}}:{})})).status,403);
  assert.equal((await app.request('/api/general-admin/test-email',{method:'POST',cookie:alice.cookie,data:{}})).status,403);
+ for(const route of ['/api/general-admin/incidents','/api/general-admin/incidents/1']){assert.equal((await app.request(route)).status,401);assert.equal((await app.request(route,{cookie:alice.cookie})).status,403);}
  for(const value of ['','bad','a@example.com,b@example.com','a@example.com\r\nBcc:b@example.com','Name <a@example.com>'])assert.equal((await app.request('/api/general-admin',{method:'PATCH',cookie:root,data:{alert_email:value}})).status,400);
  assert.equal((await app.request('/api/general-admin',{method:'PATCH',cookie:root,data:{alert_email:'first@example.com'},headers:{'X-Requested-With':''}})).status,403);
  assert.equal((await app.request('/api/general-admin',{method:'PATCH',cookie:root,data:{alert_email:'first@example.com'}})).status,200);
@@ -30,6 +31,9 @@ test('all admins share audited alert settings; USER and anonymous cannot access 
  change(instance.id,'authenticated');change(instance.id,'disconnected');await new Promise(r=>setTimeout(r,10));
  const mine=(await app.request('/api/dashboard',{cookie:alice.cookie})).body;assert.equal(mine.counts.alerts,1);assert.ok(mine.instances[0].connection_alert);assert.equal(mine.instances[0].token,undefined);
  assert.equal((await app.request('/api/dashboard',{cookie:bob.cookie})).body.counts.alerts,0);assert.equal((await app.request('/api/dashboard',{cookie:other.cookie})).body.counts.alerts,1);assert.equal(sent.length,1);assert.equal(sent[0].to,'second@example.com');
+ const historyResponse=await app.request('/api/general-admin/incidents?limit=1',{cookie:other.cookie});assert.equal(historyResponse.status,200);assert.equal(historyResponse.body.total,1);assert.equal(historyResponse.body.incidents[0].instance_name,'Alice channel');
+ const detailsResponse=await app.request('/api/general-admin/incidents/'+historyResponse.body.incidents[0].id,{cookie:root});assert.equal(detailsResponse.status,200);assert.equal(detailsResponse.body.events.at(-1).kind,'email_sent');
+ assert.equal((await app.request('/api/general-admin/incidents?from=2026-02-30',{cookie:root})).status,400);assert.equal((await app.request('/api/general-admin/incidents/999999',{cookie:root})).status,404);
  change(instance.id,'retrying');await new Promise(r=>setTimeout(r,10));assert.equal(sent.length,1);
  change(instance.id,'authenticated');assert.equal((await app.request('/api/dashboard',{cookie:alice.cookie})).body.counts.alerts,0);
  assert.equal((await app.request('/api/general-admin/test-email',{method:'POST',cookie:other.cookie,data:{}})).status,200);

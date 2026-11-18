@@ -5,7 +5,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends git ca-certific
     && git config --system url."https://github.com/".insteadOf ssh://git@github.com/
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
-COPY --chown=node:node media-storage.mjs media-input.mjs media-relay.mjs remote-media.mjs instance-settings.mjs image-convert.mjs compatibility-api.mjs server.mjs store.mjs auth.mjs transport.mjs branding.mjs alert-email.mjs connection-alerts.mjs ./
+COPY --chown=node:node media-storage.mjs media-input.mjs media-relay.mjs remote-media.mjs instance-settings.mjs image-convert.mjs compatibility-api.mjs server.mjs store.mjs auth.mjs transport.mjs branding.mjs alert-email.mjs connection-alerts.mjs incident-history.mjs ./
 COPY --chown=node:node public ./public
 RUN mkdir /app/data && chown node:node /app/data && chmod 700 /app/data
 USER node

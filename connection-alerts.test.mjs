@@ -6,8 +6,45 @@ import path from 'node:path';
 import {openStore} from './store.mjs';
 import {createConnectionAlerts} from './connection-alerts.mjs';
 import {alertMessage,sendAlertEmail} from './alert-email.mjs';
+import {createIncidentHistory} from './incident-history.mjs';
 
 const actor={id:'admin',name:'Test Admin',email:'admin@example.com'};
+test('incident details capture identity at loss, technical metadata, duration and the email timeline without duplicating alerts',async t=>{
+ const {store,alerts,sent,advance}=await fixture(t);alerts.updateEmail(actor,'team@example.com');
+ store.db.prepare("UPDATE instances SET phone='5511999999999',name='Original name' WHERE id='aaaa1111'").run();
+ alerts.stateChanged('aaaa1111','authenticated');advance(60000);
+ alerts.stateChanged('aaaa1111','disconnected','Session ended',{source:'whatsapp',code:401,reconnectAttempt:0});await alerts.drain();
+ const history=createIncidentHistory(store.db),first=history.list().incidents[0];
+ assert.equal(first.instance_name,'Original name');assert.equal(first.instance_phone,'5511999999999');assert.equal(first.owner_name,actor.name);assert.equal(first.disconnect_code,401);assert.equal(first.source,'whatsapp');assert.ok(first.email_sent_at);assert.equal(first.capture_version,'v2');
+ store.db.prepare("UPDATE instances SET name='Renamed',phone='',owner_id=NULL WHERE id='aaaa1111'").run();
+ alerts.stateChanged('aaaa1111','retrying','Reconnect',{source:'whatsapp',reconnectAttempt:1});alerts.stateChanged('aaaa1111','disconnected','Another close',{source:'whatsapp',code:408,reconnectAttempt:1});await alerts.drain();
+ advance(120000);alerts.stateChanged('aaaa1111','authenticated');
+ const detail=history.detail(first.id);assert.equal(detail.incident.instance_name,'Original name');assert.equal(detail.incident.instance_phone,'5511999999999');assert.equal(detail.incident.reconnect_attempts,1);assert.equal(detail.incident.disconnect_code,401);assert.equal(detail.incident.duration_seconds,120);assert.equal(sent.length,1);
+ assert.deepEqual(detail.events.map(e=>e.kind),['outage_opened','email_attempt','email_sent','connection_update','connection_update','reconnected']);
+ assert.equal(detail.events[0].details.code,401);assert.equal(detail.events[4].details.code,408);assert.equal(detail.events[1].details.recipient,'team@example.com');assert.ok(detail.events[2].details.message_id);
+});
+test('history pages include older than 100 incidents; filters and pattern totals use the entire selected dataset',async t=>{
+ const {store}=await fixture(t),db=store.db;
+ const insert=db.prepare("INSERT INTO connection_incidents(instance_id,opened_at,resolved_at,reason,notification_status,instance_name,source,disconnect_code) VALUES(?,?,?,?,?,?,?,?)");
+ db.exec('BEGIN');for(let n=0;n<130;n++)insert.run(n%2?'aaaa1111':'bbbb2222',new Date(Date.parse('2026-11-18T15:00:00Z')+n*60000).toISOString(),'2026-11-19T15:00:00Z',n%2?'Timed out':'Logout',n%2?'sent':'failed',n%2?'Sales A':'Sales B',n%2?'whatsapp':'manual_disconnect',n%2?408:401);db.exec('COMMIT');
+ const history=createIncidentHistory(db),first=history.list(),last=history.list(new URLSearchParams({page:'6'}));
+ assert.equal(first.total,130);assert.equal(first.incidents.length,25);assert.equal(first.pages,6);assert.equal(last.incidents.length,5);assert.equal(first.summary.emails_sent,65);assert.equal(first.patterns.by_instance[0].count,65);
+ const filtered=history.list(new URLSearchParams({instance_id:'aaaa1111',status:'resolved',email_status:'sent',from:'2026-11-18',to:'2026-11-18'}));assert.equal(filtered.total,65);assert.ok(filtered.incidents.every(i=>i.instance_id==='aaaa1111'));assert.equal(filtered.patterns.by_reason[0].disconnect_code,408);
+ const firstIDs=new Set(first.incidents.map(i=>i.id));assert.ok(last.incidents.every(i=>!firstIDs.has(i.id)));
+ for(const params of [{page:'0'},{limit:'101'},{page:'9007199254740992'},{from:'2026-02-30'},{from:'2026-11-19',to:'2026-11-18'},{email_status:'bad'},{status:'bad'},{instance_id:"' OR 1=1"}])assert.throws(()=>history.list(new URLSearchParams(params)),e=>e.status===400);
+});
+test('date ranges and recurring hours use Brasilia boundaries, and timeline events are paginated without loss',async t=>{
+ const {store}=await fixture(t),db=store.db,insert=db.prepare("INSERT INTO connection_incidents(instance_id,opened_at,resolved_at,reason) VALUES('aaaa1111',?,?,'old')");
+ insert.run('2026-11-18T02:59:59.000Z','2026-11-18T03:00:00.000Z');const id=Number(insert.run('2026-11-18T03:00:00.000Z','2026-11-18T03:01:30.000Z').lastInsertRowid);insert.run('2026-11-19T02:59:59.000Z','2026-11-19T03:00:00.000Z');insert.run('2026-11-19T03:00:00.000Z','2026-11-19T03:01:00.000Z');
+ for(let n=0;n<121;n++)db.prepare("INSERT INTO connection_incident_events(incident_id,created_at,kind,details) VALUES(?,?,?,'{}')").run(id,'2026-11-18T03:00:00.000Z','connection_update');
+ const history=createIncidentHistory(db),filtered=history.list(new URLSearchParams({from:'2026-11-18',to:'2026-11-18'}));assert.equal(filtered.total,2);assert.equal(filtered.patterns.by_hour.find(h=>h.hour==='00').count,1);assert.equal(filtered.patterns.by_hour.find(h=>h.hour==='23').count,1);
+ const first=history.detail(id,new URLSearchParams({limit:'100'})),second=history.detail(id,new URLSearchParams({page:'2',limit:'100'}));assert.equal(first.incident.duration_seconds,90);assert.equal(first.total_events,121);assert.equal(first.pages,2);assert.equal(second.events.length,21);assert.ok(second.events[0].id>first.events.at(-1).id);
+ assert.throws(()=>history.detail(999999),e=>e.status===404);assert.throws(()=>history.detail('not-an-id'),e=>e.status===400);
+});
+test('legacy migration preserves original dates and mail status without inventing technical or send timestamps',async t=>{
+ const {store,dir}=await fixture(t);const inserted=store.db.prepare("INSERT INTO connection_incidents(instance_id,opened_at,resolved_at,reason,notification_status) VALUES('aaaa1111','2026-11-17T15:00:00.000Z','2026-11-17T15:10:00.000Z','Legacy outage','sent')").run();
+ const reopened=openStore(dir);try{const row=createIncidentHistory(reopened.db).detail(Number(inserted.lastInsertRowid)).incident;assert.equal(row.opened_at,'2026-11-17T15:00:00.000Z');assert.equal(row.notification_status,'sent');assert.equal(row.email_sent_at,null);assert.equal(row.capture_version,'legacy');assert.equal(row.disconnect_code,null);assert.equal(row.instance_name,'Sales aaaa1111');}finally{reopened.close();}
+});
 async function fixture(t,opts={}){
  const dir=await mkdtemp(path.join(tmpdir(),'wa-alert-'));let store=openStore(dir);
  store.db.prepare('INSERT INTO users(id,name,email,password_hash,role,created_at) VALUES(?,?,?,?,?,?)').run(actor.id,actor.name,actor.email,'unused','admin','now');

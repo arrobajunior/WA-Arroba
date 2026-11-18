@@ -43,3 +43,14 @@ Não foi feita atualização da biblioteca Baileys.
 - [ ] Homologar queda/recuperação com uma instância de teste já pareada, sem desconectar canais reais apenas para testar.
 - [x] Implantação da Administração Geral (a88ef44) confirmada como SUCCESS.
 - [ ] Confirmar implantação que aplica as novas variáveis SMTP e registrar resultado do envio real. Variáveis cadastradas não comprovam autenticação SMTP nem entrega de e-mail.
+
+## Histórico detalhado — ponto de retomada
+- [x] Card independente com todas as quedas paginadas e filtros.
+- [x] Detalhes com duração, recuperação, código/origem e identidade capturada na queda.
+- [x] Linha do tempo de conexão e envio de e-mails, também paginada.
+- [x] Resumos e frequências no conjunto completo filtrado.
+- [x] Migração preserva registros antigos e informa os limites de dados não coletados.
+- [x] 46 testes aprovados e navegação/filtros/detalhes verificados em DOM local.
+- [x] Implantação SMTP 0333f587 confirmada como SUCCESS antes desta alteração.
+- [ ] Confirmar implantação desta expansão no Railway e homologar com ocorrências reais futuras; os novos detalhes técnicos só existem a partir desta versão.
+- [ ] Homologar autenticação SMTP/entrega usando o destinatário configurado, sem inventar confirmação a partir do cadastro de variáveis.

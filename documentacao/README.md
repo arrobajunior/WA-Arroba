@@ -35,3 +35,8 @@ Não é necessário levar todo o chat. Os arquivos descrevem o estado conhecido;
 ## Administração Geral e alertas de conexão
 Veja [ALERTAS.md](ALERTAS.md). Todos os ADMINs podem configurar o destinatário; USER não pode acessar essa área. Alterações e testes são auditados. A página principal destaca quedas em vermelho e atualiza a cada 10 segundos.
 Em 18/11/2026, o usuário autorizou explicitamente cadastrar as credenciais SES no Railway, serviço WA-Arroba/production. SES_SMTP_USER e SES_SMTP_PASS foram gravadas somente nas variáveis do serviço, sem divulgar valores no repositório. A implantação da área de alertas (a88ef44) foi confirmada como SUCCESS. Este registro dispara nova implantação para aplicar o ambiente atualizado. Próximo passo: admin cadastrar/conferir o destinatário e enviar um teste; SMTP e entrega real ainda precisam de homologação.
+
+## Histórico detalhado de quedas
+Administração Geral contém um card **Histórico de quedas**, com paginação de todas as ocorrências, filtros por instância/período/conexão/e-mail e botão **Ver detalhes**. Horários são exibidos em Brasília. Veja ALERTAS.md para campos e limites históricos.
+incident-history.mjs fornece a consulta e os resumos. connection_incident_events guarda a linha do tempo; o motivo/código/origem e a identidade da instância são capturados na ocorrência. Novas colunas e tabela são aditivas e preservam registros existentes. Não é possível reconstruir metadados que não foram coletados em quedas antigas.
+A implantação 0333f587 (variáveis SMTP cadastradas após autorização) foi confirmada como SUCCESS no Railway. A autenticação SMTP e a entrega real ainda dependem de um teste com o destinatário escolhido no painel; não assumir entrega só pela configuração.

@@ -31,3 +31,13 @@
 - SES_SMTP_USER e SES_SMTP_PASS foram cadastradas como variáveis desse serviço, sem incluir valores nos arquivos ou no GitHub.
 - A implantação a88ef44 da Administração Geral foi confirmada como SUCCESS. Esta atualização documental dispara a implantação com as novas variáveis.
 - Pendente: confirmar implantação com variáveis e homologar e-mail de teste no destinatário escolhido no painel. Não foi desconectada instância real para testar.
+
+## 18/11/2026 — Histórico detalhado de quedas
+- Expandido card independente na Administração Geral: todas as ocorrências são acessíveis por paginação, sem limitar a consulta aos 100 últimos registros.
+- Filtros por instância, início/fim (data da queda em Brasília), conexão em aberto/resolvida e estado do e-mail.
+- Registro preserva nome, ID, número e responsável no momento da queda; início, recuperação, duração e última confirmação de conexão; código numérico informado pelo WhatsApp, origem, tentativas automáticas e referências de implantação/commit quando disponíveis no ambiente.
+- Linha do tempo registra abertura, mudanças/QR/reconexão, recuperação, tentativas/envio/falhas/cancelamento do e-mail e reentrada na fila. Mostra destinatário, horário e ID de mensagem SMTP, com retentativas de configuração distinguíveis.
+- E-mails aceitos pelo SES são exibidos como enviados ao provedor. Pendente/falha/sem confirmação continuam distintos; a queda não é prova de entrega de e-mail.
+- Resumos e recorrências por instância, motivo/código e horário usam todo o filtro, não apenas a página. São frequências observadas, não diagnóstico automático de causa.
+- Registros anteriores são preservados e identificados como históricos limitados: nomes/números são recuperados do cadastro disponível e horários/códigos ausentes permanecem não registrados.
+- Validação: 46 testes automatizados aprovados; verificação DOM local passou para filtros, detalhes, linha do tempo SMTP, paginação e recuperação. Nenhum canal real foi desconectado para teste e nenhum e-mail real de teste foi enviado nesta mudança.

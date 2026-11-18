@@ -52,7 +52,7 @@ const MAX_MEDIA_BYTES=20*1024*1024; */
 export function createTransport(store, { socketFactory=makeWASocket, retryDelay=2000, mediaBaseUrl, mediaDownloader=downloadMediaMessage, mediaRelay=createMediaRelay(), legacyStorage=()=>null, mediaLoader=mediaInput, onConnectionState=()=>{} }={}) {
   const {db,encrypt,decrypt}=store, entries=new Map(), work=new Map();
   let closed=false;
-  const notify=(id,status,reason)=>{try{onConnectionState(id,status,reason);}catch{console.error('[connection-alerts] Não foi possível registrar a mudança de conexão.');}};
+  const notify=(id,status,reason,metadata={})=>{try{onConnectionState(id,status,reason,metadata);}catch{console.error('[connection-alerts] Não foi possível registrar a mudança de conexão.');}};
   const settingsFor=id=>readSettings(db.prepare('SELECT settings,webhook_url FROM instances WHERE id=?').get(id)||{});
   const webhookFor=(id,event)=>{const s=settingsFor(id);return (!event||s['webhook_'+event])?s.webhook_url:'';};
   const remember=(map,key,value,max=2000)=>{map.delete(key);map.set(key,value);while(map.size>max)map.delete(map.keys().next().value);};
@@ -80,6 +80,7 @@ export function createTransport(store, { socketFactory=makeWASocket, retryDelay=
     const e={status:'initialize',qr:null,error:null,socket:null,timer:null,contacts:new Map(),chats:new Map(),messages:new Map(),webhooked:new Map(),invalidContacts:new Map()};entries.set(id,e);
     const valid=()=>!closed&&entries.get(id)===e;
     const credentials=auth(id,valid);
+    if(attempt>0)notify(id,'retrying','Tentativa automática de reconexão.',{source:'whatsapp',reconnectAttempt:attempt});
     e.credentials=credentials.state;
     db.prepare('UPDATE instances SET auto_connect=1 WHERE id=?').run(id);
     try {
@@ -115,19 +116,19 @@ export function createTransport(store, { socketFactory=makeWASocket, retryDelay=
       e.socket.ev.on('creds.update',()=>{if(valid())credentials.save();});
       e.socket.ev.on('connection.update',update=>{
         if(!valid())return;
-        if(update.qr){e.qr=update.qr;e.status='qr';notify(id,'qr','A sessão precisa de uma nova leitura do QR Code.');}
+        if(update.qr){e.qr=update.qr;e.status='qr';notify(id,'qr','A sessão precisa de uma nova leitura do QR Code.',{source:'whatsapp',reconnectAttempt:attempt});}
         if(update.connection==='open'){
           e.status='authenticated';e.qr=null;e.error=null;attempt=0;
           const phone=(e.socket.user?.id||'').split(':')[0].split('@')[0];
           db.prepare('UPDATE instances SET phone=?,updated_at=? WHERE id=?').run(phone,new Date().toISOString(),id);
-          notify(id,'authenticated');
+          notify(id,'authenticated',undefined,{source:'whatsapp'});
           flush(id);
         }
         if(update.connection==='close') {
           e.qr=null;
           if(e.status==='disconnecting')return;
           const reason=update.lastDisconnect?.error?.output?.statusCode;
-          notify(id,'disconnected',reason===DisconnectReason.loggedOut?'A sessão foi encerrada no WhatsApp. É necessário ler um novo QR Code.':reason===DisconnectReason.connectionReplaced?'A conexão foi substituída por outra sessão.':'Conexão com o WhatsApp interrompida. O sistema tentará reconectar quando possível.');
+          notify(id,'disconnected',reason===DisconnectReason.loggedOut?'A sessão foi encerrada no WhatsApp. É necessário ler um novo QR Code.':reason===DisconnectReason.connectionReplaced?'A conexão foi substituída por outra sessão.':'Conexão com o WhatsApp interrompida. O sistema tentará reconectar quando possível.',{source:'whatsapp',code:reason,reconnectAttempt:attempt});
           if(reason===DisconnectReason.loggedOut){db.prepare('DELETE FROM wa_keys WHERE instance_id=?').run(id);db.prepare('UPDATE instances SET auto_connect=0 WHERE id=?').run(id);e.status='disconnected';e.error='Sessão encerrada no WhatsApp. Gere um novo QR Code.';return;}
           if(reason===DisconnectReason.connectionReplaced||attempt>=5){e.status='disconnected';e.error=reason===DisconnectReason.connectionReplaced?'Conexão substituída por outra sessão.':'Não foi possível reconectar. Tente conectar novamente.';db.prepare('UPDATE instances SET auto_connect=0 WHERE id=?').run(id);return;}
           e.status='retrying';
@@ -180,7 +181,7 @@ export function createTransport(store, { socketFactory=makeWASocket, retryDelay=
         if(!valid()||type!=='notify')return; // ignora replay de histórico em reconexões
         cacheMessages(messages);for(const msg of messages)handleIncoming(msg).catch(err=>console.error(`[webhook] erro ao processar mensagem: ${err.message}`));
       });
-    }catch(error){e.status='disconnected';e.error='Falha ao iniciar conexão WhatsApp.';db.prepare('UPDATE instances SET auto_connect=0 WHERE id=?').run(id);notify(id,'disconnected',e.error);throw error;}
+    }catch(error){e.status='disconnected';e.error='Falha ao iniciar conexão WhatsApp.';db.prepare('UPDATE instances SET auto_connect=0 WHERE id=?').run(id);notify(id,'disconnected',e.error,{source:'transport_start',reconnectAttempt:attempt});throw error;}
     return state(id);
   }
   function flush(id) {
@@ -298,7 +299,7 @@ export function createTransport(store, { socketFactory=makeWASocket, retryDelay=
     if(!e?.socket||e.status==='disconnected')throw Object.assign(new Error('A instância já está desconectada.'),{status:409,code:'not_authenticated'});
     const old=e.status;e.status='disconnecting';e.qr=null;clearTimeout(e.timer);
     try{if(e.credentials.creds.registered)await e.socket.logout();}catch{e.status=old;throw new Error('Não foi possível confirmar o logout no WhatsApp. Tente novamente.');}
-    notify(id,'disconnected','A instância foi desconectada pelo painel ou pela API.');
+    notify(id,'disconnected','A instância foi desconectada pelo painel ou pela API.',{source:'manual_disconnect'});
     entries.delete(id);e.wake?.();e.socket.end(new Error('Logout solicitado.'));
     db.prepare('DELETE FROM wa_keys WHERE instance_id=?').run(id);db.prepare('UPDATE instances SET auto_connect=0,phone=? WHERE id=?').run('',id);
   }

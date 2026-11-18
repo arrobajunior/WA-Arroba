@@ -4,7 +4,7 @@
 1. Entre como ADMIN ou Admin Master e abra **Administração Geral** no menu lateral.
 2. Informe um único e-mail (pode ser um grupo de distribuição) e clique em **Salvar e-mail de alerta**.
 3. Com SMTP configurado, use **Enviar e-mail de teste**. O teste usa o endereço salvo e fica no log; limitado a um por minuto.
-4. Veja **Histórico de alterações** e **Quedas e envio de alertas** na mesma página. Exibem os últimos 100 registros; os anteriores continuam no banco. Atualizar histórico recarrega a tela.
+4. Veja **Histórico de alterações** (últimos 100 registros de configuração) e o card separado **Histórico de quedas** (todas as ocorrências por paginação). Atualizar histórico recarrega a tela e mantém os filtros das quedas.
 5. No dashboard e na listagem, uma ocorrência aberta aparece em vermelho, com link para gerenciar a instância. A atualização é automática a cada 10s; não acontece enquanto um diálogo de criação está aberto.
 
 ## Acesso e auditoria
@@ -40,3 +40,27 @@ Código e testes completos; implantação da Administração Geral (a88ef44) con
 alert-email.mjs: template e SMTP. connection-alerts.mjs: fila/ocorrências/log. store.mjs: migrações aditivas. transport.mjs: eventos de conexão. server.mjs: endpoints com autenticação/CSRF. public/: painel.
 Endpoints: GET/PATCH /api/general-admin e POST /api/general-admin/test-email, com sessão ADMIN e proteção CSRF para gravações.
 npm test: 42 testes com SMTP/WhatsApp simulados, incluindo isolamento USER, compartilhamento ADMIN, log, repetição, reinício, falhas, recuperação e não duplicação.
+
+## Histórico de quedas e investigação de padrões
+Todos os ADMINs podem consultar, inclusive quem não é Master. USER não acessa esses endpoints. Não há ação para apagar ocorrências ou sua linha do tempo.
+
+| Informação | Registro |
+|---|---|
+| Instância | Nome, número, ID e responsável capturados na abertura |
+| Tempos | Início, recuperação, duração sem conexão, última confirmação de conexão, último evento |
+| Contexto técnico | Origem (WhatsApp, ação painel/API, verificação após reinício, falha de inicialização), código numérico quando fornecido, tentativas automáticas |
+| Implantação | ID de deployment/commit quando as variáveis correspondentes estiverem disponíveis; nunca captura o ambiente completo |
+| E-mail | Estado real, destinatário usado, horário de aceitação, ID SMTP, tentativas no ciclo atual e código resumido da última falha |
+| Linha do tempo | Abertura, mudanças, reconexão, tentativa de e-mail, aceitação/falha, cancelamento e reentrada na fila |
+
+Filtros: instância, datas inclusivas de início/fim da queda em horário de Brasília, conexão em aberto/resolvida e estado do e-mail. A consulta retorna 25 ocorrências por página na interface. **Ver detalhes** abre a linha do tempo, com opção de carregar mais eventos. O histórico persiste após reconectar e reiniciar.
+Os resumos de quedas/recuperações/e-mails e as recorrências por instância, motivo e hora consideram todo o conjunto filtrado, incluindo páginas não exibidas. Um padrão de horário não comprova a causa. Tentativas de reconectar pertencem à mesma ocorrência e não geram novos e-mails até recuperação e nova queda.
+As tentativas de e-mail mostradas no resumo da ocorrência são do ciclo atual (podem reiniciar ao salvar novamente o destinatário); a linha do tempo preserva as tentativas registradas dos ciclos anteriores.
+As novas capturas não reconstroem o passado: ocorrências antigas são marcadas como **registro anterior ao histórico detalhado**, não recebem horário de envio/código fictícios e podem ter identificação reconstituída do cadastro existente na migração.
+
+Endpoints ADMIN autenticados:
+- GET /api/general-admin/incidents?instance_id=&from=AAAA-MM-DD&to=AAAA-MM-DD&status=all|open|resolved&email_status=all|sent|...&page=1&limit=25
+- GET /api/general-admin/incidents/{id}?page=1&limit=100
+
+Limite máximo por página de API: 100. Os eventos são paginados em ordem de registro. A aplicação não grava stack traces, tokens ou respostas brutas de autenticação no histórico. O registro **enviado ao SES** indica aceitação SMTP, não confirmação de chegada na caixa do destinatário.
+Validação da expansão: 46 testes automatizados, incluindo mais de 100 ocorrências, paginação de eventos, fronteiras de dia de Brasília, preservação histórica, snapshots após renomear, permissões e não duplicação; teste DOM cobre navegação de filtros/detalhes/páginas.

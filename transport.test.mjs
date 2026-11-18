@@ -13,8 +13,8 @@ test('connection lifecycle emits alert transitions for real closes and logout, w
  const transitions=[];const {transport,sockets}=await setup(t,{retryDelay:100000,onConnectionState:(...args)=>transitions.push(args)});
  transport.connect('abcd1234');const first=sockets[0];first.ev.emit('connection.update',{qr:'test'});first.ev.emit('connection.update',{connection:'open'});
  assert.equal(transitions.at(-1)[1],'authenticated');first.ev.emit('connection.update',{connection:'close',lastDisconnect:{error:{output:{statusCode:401}}}});
- assert.equal(transitions.at(-1)[1],'disconnected');assert.match(transitions.at(-1)[2],/QR Code/);
- transport.connect('abcd1234');sockets[1].ev.emit('connection.update',{connection:'open'});await transport.disconnect('abcd1234');assert.match(transitions.at(-1)[2],/painel ou pela API/);
+ assert.equal(transitions.at(-1)[1],'disconnected');assert.match(transitions.at(-1)[2],/QR Code/);assert.equal(transitions.at(-1)[3].source,'whatsapp');assert.equal(transitions.at(-1)[3].code,401);
+ transport.connect('abcd1234');sockets[1].ev.emit('connection.update',{connection:'open'});await transport.disconnect('abcd1234');assert.match(transitions.at(-1)[2],/painel ou pela API/);assert.equal(transitions.at(-1)[3].source,'manual_disconnect');
  transport.connect('abcd1234');sockets[2].ev.emit('connection.update',{connection:'open'});const count=transitions.length;await transport.close();assert.equal(transitions.length,count);
  first.ev.emit('connection.update',{connection:'close'});assert.equal(transitions.length,count);
 });

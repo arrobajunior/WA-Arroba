@@ -12,6 +12,7 @@ import { openStore } from './store.mjs';
 import { passwordHash,passwordValid,digest,equal,sessionToken,publicUser } from './auth.mjs';
 import { createTransport } from './transport.mjs';
 import {createConnectionAlerts} from './connection-alerts.mjs';
+import {createIncidentHistory} from './incident-history.mjs';
 
 const directory=path.dirname(fileURLToPath(import.meta.url));
 const fail=(status,code,message)=>Object.assign(new Error(message),{status,code});
@@ -43,6 +44,7 @@ export async function createApp({dataDir=path.join(directory,'.data'),port=3210,
   }catch(e){store.close();throw e;}
   const mediaBaseUrl=publicOrigin||`http://127.0.0.1:${port}`;
   const alerts=createConnectionAlerts(store,{publicUrl:publicOrigin,appName:()=>branding.read().name,...alertOptions});
+  const incidentHistory=createIncidentHistory(db);
   const transport=transportFactory(store,{mediaBaseUrl,mediaRelay,legacyStorage:legacy,onConnectionState:alerts.stateChanged}),attempts=new Map();
   const dummyHash=await passwordHash(randomBytes(32).toString('hex'));
   const secure=publicOrigin?.startsWith('https:');
@@ -100,7 +102,10 @@ export async function createApp({dataDir=path.join(directory,'.data'),port=3210,
         if(pathname==='/api/auth/logout'&&method==='POST'){db.prepare('DELETE FROM sessions WHERE id=?').run(digest(sessionToken(req)));res.setHeader('Set-Cookie',cookie('',0));return json(res,200,{ok:true});}
         if(pathname.startsWith('/api/general-admin')){
           if(session.role!=='admin')throw fail(403,'forbidden','Acesso administrativo necessário.');
-          if(pathname==='/api/general-admin'&&method==='GET')return json(res,200,{settings:alerts.settings(),smtp_ready:alerts.mailReady(),audit:db.prepare('SELECT * FROM admin_audit ORDER BY id DESC LIMIT 100').all(),incidents:db.prepare('SELECT c.*,i.name AS instance_name,i.phone FROM connection_incidents c JOIN instances i ON i.id=c.instance_id ORDER BY c.id DESC LIMIT 100').all()});
+          if(pathname==='/api/general-admin/incidents'&&method==='GET')return json(res,200,incidentHistory.list(url.searchParams));
+          const incidentMatch=pathname.match(/^\/api\/general-admin\/incidents\/(\d+)$/);
+          if(incidentMatch&&method==='GET')return json(res,200,incidentHistory.detail(incidentMatch[1],url.searchParams));
+          if(pathname==='/api/general-admin'&&method==='GET')return json(res,200,{settings:alerts.settings(),smtp_ready:alerts.mailReady(),audit:db.prepare('SELECT * FROM admin_audit ORDER BY id DESC LIMIT 100').all(),incidents:db.prepare('SELECT c.*,c.instance_phone AS phone FROM connection_incidents c ORDER BY c.id DESC LIMIT 100').all()});
           if(pathname==='/api/general-admin'&&method==='PATCH'){
             const input=await body(req);keys(input,['alert_email']);
             // A single plain address, never SMTP headers, lists or display names.
