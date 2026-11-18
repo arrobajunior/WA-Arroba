@@ -54,3 +54,9 @@
 - Migração única importa criação/data original, quedas/recuperações existentes e auditoria anterior de e-mail. Autorias ausentes continuam desconhecidas; não atribui ao dono atual.
 - Webhook registra somente origem e SHA-256 da URL, sem senha, rota ou parâmetros; tokens antigos/novos nunca são gravados.
 - Validação: 52 testes automatizados aprovados; DOM local verificou aba por instância, solicitação de token, renovação, filtros globais, identificação do executor, paginação e manutenção do histórico de quedas. Não houve envio real de e-mail nem desconexão de canal real para testar.
+
+## 18/11/2026 — Redução de ruído nos acessos
+- Por solicitação do usuário, removido o evento instance_viewed da simples consulta de detalhes da instância.
+- Mantido messages_viewed ao consultar mensagens (incluindo acesso à aba, filtros e atualização manual), com autoria real.
+- Alterações, token, conexão e acessos negados continuam auditados. Registros antigos são preservados.
+- Teste de integração atualizado para verificar ausência de instance_viewed e presença de messages_viewed para o executor correto.

@@ -10,7 +10,7 @@
 ## Eventos cobertos
 | Área | Eventos |
 |---|---|
-| Instância | Criação e acesso aos dados/credenciais; consulta de mensagens |
+| Instância | Criação e consulta de mensagens; simples abertura da instância não gera log |
 | Configuração | Nome/webhook pelo painel; configurações de webhook/fila pela API compatível |
 | Credenciais | Pedido de mostrar/copiar token e renovação; nenhum valor do token é salvo |
 | Conexão | Solicitação de conexão/desconexão, QR disponível, queda, tentativa automática e confirmação |
@@ -19,7 +19,7 @@
 | Geral | Mudança do e-mail de alerta e solicitação/resultado de teste, além do log anterior de configuração |
 | Permissão | Tentativa autenticada de acessar instância de outra pessoa, negada pelo servidor |
 
-Consultas automáticas de status/QR pelo painel não geram um registro a cada polling. A leitura do histórico não se autorregistra em loop. O acesso ao endpoint de dados da instância retorna credenciais e por isso é auditado, mesmo sem clicar em Mostrar; os cliques de Mostrar/Copiar são registrados adicionalmente como solicitações. Uma solicitação de cópia não é prova de sucesso do clipboard do navegador.
+Consultas automáticas de status/QR pelo painel não geram um registro a cada polling. A leitura do histórico não se autorregistra em loop. Por preferência explícita do usuário, abrir/consultar os dados gerais da instância não gera mais registro. A consulta de Mensagens (inclusive filtros/atualização manual) gera messages_viewed. Mostrar/Copiar token continuam registrados como solicitações. Registros instance_viewed anteriores são preservados, mas não são mais gerados pela visita normal. Uma solicitação de cópia não é prova de sucesso do clipboard do navegador.
 
 ## Autoria e confirmação
 - **Usuário autenticado:** ID/nome/e-mail/perfil vêm da sessão no servidor; não de campos enviados pelo navegador.

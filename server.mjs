@@ -182,7 +182,7 @@ export async function createApp({dataDir=path.join(directory,'.data'),port=3210,
         }
         const match=pathname.match(/^\/api\/instances\/([a-f0-9]{8})(?:\/(qr|connect|disconnect|token|messages|activity|credential-access))?$/);
         if(match){const [,id,action]=match,row=lookup(id);authorize(session,row);
-          if(!action&&method==='GET'){activity.record({instance:row,actor:activity.userActor(session),action:'instance_viewed',outcome:'observed',source:'panel',details:{credentials_included:true},peer_ip:req.socket.remoteAddress||''});return json(res,200,{instance:serialize(row,true)});}
+          if(!action&&method==='GET')return json(res,200,{instance:serialize(row,true)});
           if(action==='activity'&&method==='GET')return json(res,200,activity.list(url.searchParams,id));
           if(action==='credential-access'&&method==='POST'){
             const input=await body(req);keys(input,['action']);if(!['reveal','copy'].includes(input.action))throw fail(400,'invalid_field','Ação inválida.');

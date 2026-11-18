@@ -45,3 +45,6 @@ A implantação 0333f587 (variáveis SMTP cadastradas após autorização) foi c
 Cada instância possui a aba **Histórico e segurança**. Administração Geral tem o card **Log de atividades e segurança**, com todas as instâncias e filtros por pessoa, ação, resultado, origem da autoria e período. Leia [AUDITORIA.md](AUDITORIA.md).
 instance-activity.mjs centraliza registro/consulta; instance_activity é uma tabela apenas de acréscimo pela aplicação. As operações de painel têm autoria da sessão autenticada; integrações com token são identificadas separadamente; eventos automáticos são do sistema. Tokens/senhas/QR/conteúdo de mensagens não vão ao log. Webhooks são representados por origem e hash, sem URL completa.
 A implantação anterior do histórico de quedas (6c791cf) foi confirmada como SUCCESS. As credenciais SMTP permanecem somente no ambiente do Railway; não foram alteradas nesta expansão de auditoria.
+
+### Ajuste de escopo solicitado em 18/11/2026
+A simples abertura/consulta dos dados da instância não gera mais log. A consulta da aba Mensagens continua auditada, assim como alterações, ações de token e conexão. Registros antigos de acesso já gravados são preservados.

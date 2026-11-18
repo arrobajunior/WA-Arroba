@@ -21,6 +21,7 @@ test('security audit records real actors, sensitive actions and failures, separa
  const ownHistory=()=>app.request('/api/instances/'+i.id+'/activity?limit=100',{cookie:owner.cookie});
  assert.equal((await app.request('/api/general-admin/activity')).status,401);assert.equal((await app.request('/api/general-admin/activity',{cookie:owner.cookie})).status,403);assert.equal((await app.request('/api/instances/'+i.id+'/activity',{cookie:other.cookie})).status,404);
  await app.request('/api/instances/'+i.id,{cookie:second.cookie});
+ await app.request('/api/instances/'+i.id+'/messages',{cookie:second.cookie});
  const rawHook='https://hook-user:hook-password@hooks.example.com/secret-path?token=secret-query';
  assert.equal((await app.request('/api/instances/'+i.id,{method:'PATCH',cookie:second.cookie,data:{name:'Updated instance',webhook_url:rawHook}})).status,200);
  assert.equal((await app.request('/api/instances/'+i.id,{method:'PATCH',cookie:second.cookie,data:{webhook_url:'not-a-url'}})).status,400);
@@ -34,7 +35,7 @@ test('security audit records real actors, sensitive actions and failures, separa
  emit(i.id,'disconnected',{source:'whatsapp',code:408});
  assert.equal((await app.request('/instance'+i.id+'/instance/settings',{method:'POST',data:{token:newToken,sendDelay:4,webhook_url:rawHook}})).status,200);
  assert.equal((await app.request('/instance'+i.id+'/messages/chat',{method:'POST',data:{token:newToken,to:'5511999999999',body:'CONFIDENTIAL_MESSAGE_BODY'}})).status,200);
- const history=(await ownHistory()).body;assert.ok(history.events.some(e=>e.action==='instance_created'&&e.actor_id===owner.user.id));assert.ok(history.events.some(e=>e.action==='instance_viewed'&&e.actor_id===second.user.id));assert.ok(history.events.some(e=>e.action==='token_rotated'&&e.outcome==='success'&&e.actor_id===second.user.id));
+ const history=(await ownHistory()).body;assert.ok(history.events.some(e=>e.action==='instance_created'&&e.actor_id===owner.user.id));assert.ok(!history.events.some(e=>e.action==='instance_viewed'));assert.ok(history.events.some(e=>e.action==='messages_viewed'&&e.actor_id===second.user.id));assert.ok(history.events.some(e=>e.action==='token_rotated'&&e.outcome==='success'&&e.actor_id===second.user.id));
  const changed=history.events.find(e=>e.action==='instance_updated'&&e.outcome==='success');assert.equal(changed.before.name,'Owned instance');assert.equal(changed.after.name,'Updated instance');assert.equal(changed.after.webhook.origin,'https://hooks.example.com');
  assert.ok(history.events.some(e=>e.action==='instance_updated'&&e.outcome==='failed'&&e.details.error_code==='invalid_webhook_url'));
  const number=history.events.find(e=>e.action==='connection_number_changed');assert.equal(number.actor_id,second.user.id);assert.deepEqual(number.before,{phone:'5511111111111'});assert.deepEqual(number.after,{phone:'5522222222222'});

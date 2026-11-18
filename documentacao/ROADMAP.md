@@ -67,3 +67,8 @@ Não foi feita atualização da biblioteca Baileys.
 - [x] Implantação anterior 6c791cf do histórico de quedas confirmada como SUCCESS.
 - [ ] Confirmar implantação desta auditoria no Railway e validar no painel com ações reais autorizadas. Não desconectar instâncias de produção apenas para testar.
 - [ ] Homologação SMTP/entrega real continua dependendo do destinatário e botão de teste já existentes; cadastro de variáveis não comprova entrega.
+
+## Preferência atual de registro de acessos
+- [x] Simples visita à instância não gera novo log; não reintroduzir instance_viewed.
+- [x] Acesso à aba/consulta de Mensagens continua gerando messages_viewed.
+- [x] Manter auditoria de ações e preservar registros antigos.
