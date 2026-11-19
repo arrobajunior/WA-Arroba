@@ -24,7 +24,7 @@ export function createConnectionAlerts(store,{sendEmail=sendAlertEmail,mailReady
   }
   function confirmedState(id,status,reason='Conexão interrompida.',metadata={},candidate=null){
     if(stopped)return;
-    let instance=db.prepare('SELECT i.*,u.name AS owner_name FROM instances i LEFT JOIN users u ON u.id=i.owner_id WHERE i.id=?').get(id);if(!instance)return;
+    let instance=db.prepare('SELECT i.*,u.name AS owner_name FROM instances i LEFT JOIN users u ON u.id=i.owner_id WHERE i.id=?').get(id);if(!instance||!instance.active)return;
     if(candidate)instance={...instance,...JSON.parse(candidate.snapshot)};
     const time=new Date(now()).toISOString(),info=context(metadata);
     db.exec('BEGIN');try{
@@ -34,7 +34,7 @@ export function createConnectionAlerts(store,{sendEmail=sendAlertEmail,mailReady
         if(incident){
           event(incident.id,'reconnected',{status,source:info.source});
           if(['pending','blocked','error','failed'].includes(incident.notification_status))event(incident.id,'email_cancelled',{reason:'Conexão restabelecida antes de iniciar o próximo envio.'});
-          db.prepare("UPDATE connection_incidents SET resolved_at=?,notification_status=CASE WHEN notification_status IN ('pending','blocked','error','failed') THEN 'cancelled' ELSE notification_status END WHERE id=?").run(time,incident.id);
+          db.prepare("UPDATE connection_incidents SET resolved_at=?,resolution_reason='reconnected',notification_status=CASE WHEN notification_status IN ('pending','blocked','error','failed') THEN 'cancelled' ELSE notification_status END WHERE id=?").run(time,incident.id);
         }
       }else if(instance.first_connected_at&&['disconnected','retrying','qr'].includes(status)){
         if(!incident){
@@ -61,6 +61,7 @@ export function createConnectionAlerts(store,{sendEmail=sendAlertEmail,mailReady
     if(next!==null&&next!==undefined){candidateTimer=setTimeout(()=>{void drain();},Math.max(1,Math.min(2147483647,Math.max(next,startupReadyAt)-now())));candidateTimer.unref();}
   }
   function promote(candidate){
+    if(db.prepare('SELECT active FROM instances WHERE id=?').get(candidate.instance_id)?.active!==1){clearCandidate(candidate.instance_id);return;}
     confirmedState(candidate.instance_id,'disconnected',candidate.reason,JSON.parse(candidate.metadata),candidate);
     clearCandidate(candidate.instance_id);
     onConnectionEvent(candidate.instance_id,'disconnected',candidate.reason,{...JSON.parse(candidate.metadata),detected_at:candidate.opened_at,grace_seconds:graceMs/1000});
@@ -74,7 +75,7 @@ export function createConnectionAlerts(store,{sendEmail=sendAlertEmail,mailReady
   }
   function stateChanged(id,status,reason='Conexão interrompida.',metadata={}){
     if(stopped)return;
-    const instance=db.prepare('SELECT i.*,u.name AS owner_name FROM instances i LEFT JOIN users u ON u.id=i.owner_id WHERE i.id=?').get(id);if(!instance)return;
+    const instance=db.prepare('SELECT i.*,u.name AS owner_name FROM instances i LEFT JOIN users u ON u.id=i.owner_id WHERE i.id=?').get(id);if(!instance||!instance.active)return;
     const candidate=db.prepare('SELECT * FROM connection_candidates WHERE instance_id=?').get(id);
     let incident=db.prepare('SELECT id FROM connection_incidents WHERE instance_id=? AND resolved_at IS NULL').get(id);
     if(status==='authenticated'){
@@ -103,7 +104,7 @@ export function createConnectionAlerts(store,{sendEmail=sendAlertEmail,mailReady
     if(stopped)return Promise.resolve();if(work){rerun=true;return work;}
     work=(async()=>{
       promoteDue();
-      const pending=db.prepare("SELECT * FROM connection_incidents WHERE resolved_at IS NULL AND notification_status IN ('pending','error','blocked') AND next_attempt_at<=? ORDER BY id LIMIT 20").all(now());
+      const pending=db.prepare("SELECT * FROM connection_incidents WHERE resolved_at IS NULL AND notification_status IN ('pending','error','blocked') AND next_attempt_at<=? AND EXISTS(SELECT 1 FROM instances i WHERE i.id=connection_incidents.instance_id AND i.active=1) ORDER BY id LIMIT 20").all(now());
       for(const incident of pending){
         if(stopped)break;
         if(!db.prepare('SELECT id FROM connection_incidents WHERE id=? AND resolved_at IS NULL').get(incident.id))continue;
@@ -142,8 +143,16 @@ export function createConnectionAlerts(store,{sendEmail=sendAlertEmail,mailReady
     try{await sendEmail({to,test:true,appName:appName(),publicUrl});audit(actor,'alert_email_test_sent',{}, {recipient:to});}
     catch(e){audit(actor,'alert_email_test_failed',{}, {recipient:to,code:safeError(e)});throw Object.assign(new Error('Não foi possível enviar o teste. Confira o SMTP e o histórico de alertas.'),{status:502,code:'email_test_failed'});}
   }
-  function reconcile(state){for(const row of db.prepare('SELECT id FROM instances WHERE first_connected_at IS NOT NULL').all()){const status=state(row.id).status;if(status==='authenticated')stateChanged(row.id,status,'Conexão confirmada após iniciar o servidor.',{source:'startup_reconcile'});else stateChanged(row.id,'disconnected','A instância não restabeleceu a conexão após iniciar o servidor.',{source:'startup_reconcile'});}}
+  function reconcile(state){for(const row of db.prepare('SELECT id FROM instances WHERE first_connected_at IS NOT NULL AND active=1').all()){const status=state(row.id).status;if(status==='authenticated')stateChanged(row.id,status,'Conexão confirmada após iniciar o servidor.',{source:'startup_reconcile'});else stateChanged(row.id,'disconnected','A instância não restabeleceu a conexão após iniciar o servidor.',{source:'startup_reconcile'});}}
+  function deactivate(id){
+    db.exec('BEGIN');try{
+      clearCandidate(id);
+      const incident=db.prepare('SELECT id FROM connection_incidents WHERE instance_id=? AND resolved_at IS NULL').get(id);
+      if(incident){event(incident.id,'monitoring_disabled',{reason:'Monitoramento encerrado por desativação da instância; não representa reconexão.'});db.prepare("UPDATE connection_incidents SET resolved_at=?,resolution_reason='deactivated',notification_status=CASE WHEN notification_status IN ('pending','blocked','error','failed') THEN 'cancelled' ELSE notification_status END WHERE id=?").run(new Date(now()).toISOString(),incident.id);}
+      db.exec('COMMIT');
+    }catch(error){db.exec('ROLLBACK');throw error;}armCandidateTimer();
+  }
   function start(state){stateReader=state;startupReadyAt=now()+60000;timer=setInterval(()=>{void drain();},intervalMs);timer.unref();if(state){const startup=setTimeout(()=>{if(!stopped){reconcile(state);void drain();}},60000);startup.unref();const interval=timer;timer={stop:()=>{clearInterval(interval);clearTimeout(startup);}};}armCandidateTimer();}
   async function close(){stopped=true;clearTimeout(candidateTimer);if(timer?.stop)timer.stop();else clearInterval(timer);await work;}
-  return {settings,updateEmail,stateChanged,drain,sendTest,reconcile,start,close,mailReady};
+  return {settings,updateEmail,stateChanged,drain,sendTest,reconcile,start,close,mailReady,deactivate};
 }

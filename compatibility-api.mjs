@@ -11,6 +11,7 @@ export function createCompatibilityApi({store,transport,relay,baseUrl,legacy,jso
  const priority=value=>{const n=Number(value??10);if(!Number.isInteger(n)||n<0||n>10)throw fail(400,'invalid_priority','priority deve estar entre 0 e 10.');return n;};
  const recipient=value=>{const v=text(value,'to',80);if(!/^\+?\d{6,20}$/.test(v)&&!/^\d[0-9-]*@(c\.us|g\.us|s\.whatsapp\.net|lid)$/.test(v))throw fail(400,'invalid_recipient','Destinatário inválido.');return v;};
  const queue=(id,input,{kind,content='',media,payload={}})=>{
+  if(db.prepare('SELECT active FROM instances WHERE id=?').get(id)?.active!==1)throw fail(409,'instance_disabled','Instância desativada. Reative no painel antes de usar a API.');
   if(db.prepare("SELECT count(*) AS n FROM messages WHERE instance_id=? AND status IN ('queue','sending')").get(id).n>=1000)throw fail(429,'queue_full','Fila cheia.');
   const to=recipient(input.to),ref=text(input.referenceId??'','referenceId',255,false),rank=priority(input.priority);
   const messageId=randomBytes(12).toString('hex'),now=new Date().toISOString();
@@ -40,6 +41,7 @@ export function createCompatibilityApi({store,transport,relay,baseUrl,legacy,jso
   const input=method==='POST'?(mediaSend&&(req.headers['content-type']||'').startsWith('multipart/form-data')?await multipart(req):await body(req,mediaSend?Math.ceil(MAX_MEDIA_BYTES*4/3)+32768:65536)):{};
   const bearer=req.headers.authorization?.startsWith('Bearer ')?req.headers.authorization.slice(7):null,token=bearer||input.token||url.searchParams.get('token');
   if(!row||!db.prepare('SELECT id FROM users WHERE id=? AND active=1').get(row.owner_id)||typeof token!=='string'||!store.equalToken(token,decrypt(row.token)))throw fail(401,'invalid_token','Token ou instância inválidos.');
+  if(db.prepare('SELECT active FROM instances WHERE id=?').get(id)?.active!==1)throw fail(409,'instance_disabled','Instância desativada. Reative no painel antes de usar a API.');
   if(action.startsWith('media/')&&method==='GET'){
    const fileId=action.slice(6),object=db.prepare('SELECT object_key FROM media_objects WHERE instance_id=? AND message_id=?').get(id,fileId);
    if(object&&legacy()){res.writeHead(302,{Location:await legacy().url(object.object_key),'Cache-Control':'no-store'});return res.end();}

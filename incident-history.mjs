@@ -15,14 +15,14 @@ export function createIncidentHistory(db,{now=Date.now}={}){
     if(!['confirmed','transient','all'].includes(kind))throw fail('Classificação inválida.');
     if(kind!=='all'){conditions.push('c.outage_kind=?');args.push(kind);}
     if(instance){if(!/^[a-f0-9]{8}$/.test(instance))throw fail('Instância inválida.');conditions.push('c.instance_id=?');args.push(instance);}
-    if(!['all','open','resolved'].includes(status))throw fail('Situação de conexão inválida.');
-    if(status!=='all')conditions.push(status==='open'?'c.resolved_at IS NULL':'c.resolved_at IS NOT NULL');
+    if(!['all','open','resolved','deactivated'].includes(status))throw fail('Situação de conexão inválida.');
+    if(status!=='all')conditions.push(status==='open'?'c.resolved_at IS NULL':status==='deactivated'?"c.resolved_at IS NOT NULL AND c.resolution_reason='deactivated'":"c.resolved_at IS NOT NULL AND c.resolution_reason<>'deactivated'");
     if(emailStatus!=='all'){if(!mailStates.includes(emailStatus))throw fail('Situação de e-mail inválida.');conditions.push('c.notification_status=?');args.push(emailStatus);}
     if(from){conditions.push('c.opened_at>=?');args.push(dayBoundary(from));}
     if(to){conditions.push('c.opened_at<?');args.push(dayBoundary(to,1));}
     if(from&&to&&from>to)throw fail('A data inicial não pode ser posterior à final.');
     const where=conditions.length?conditions.join(' AND '):'1=1';
-    const summary=db.prepare(`SELECT count(*) AS total,COALESCE(sum(c.resolved_at IS NULL),0) AS open,COALESCE(sum(c.resolved_at IS NOT NULL),0) AS resolved,COALESCE(sum(c.notification_status='sent'),0) AS emails_sent,COALESCE(sum(c.notification_status IN ('error','failed','unknown')),0) AS email_issues FROM connection_incidents c WHERE ${where}`).get(...args);
+    const summary=db.prepare(`SELECT count(*) AS total,COALESCE(sum(c.resolved_at IS NULL),0) AS open,COALESCE(sum(c.resolved_at IS NOT NULL AND c.resolution_reason<>'deactivated'),0) AS resolved,COALESCE(sum(c.resolution_reason='deactivated'),0) AS deactivated,COALESCE(sum(c.notification_status='sent'),0) AS emails_sent,COALESCE(sum(c.notification_status IN ('error','failed','unknown')),0) AS email_issues FROM connection_incidents c WHERE ${where}`).get(...args);
     const duration="MAX(0,ROUND((julianday(COALESCE(c.resolved_at,?))-julianday(c.opened_at))*86400))";
     const incidents=db.prepare(`SELECT c.*,${duration} AS duration_seconds,(SELECT count(*) FROM connection_incident_events e WHERE e.incident_id=c.id) AS event_count FROM connection_incidents c WHERE ${where} ORDER BY c.opened_at DESC,c.id DESC LIMIT ? OFFSET ?`).all(new Date(now()).toISOString(),...args,limit,(page-1)*limit);
     const byInstance=db.prepare(`SELECT c.instance_id,MAX(c.instance_name) AS instance_name,count(*) AS count FROM connection_incidents c WHERE ${where} GROUP BY c.instance_id ORDER BY count DESC,c.instance_id LIMIT 5`).all(...args);

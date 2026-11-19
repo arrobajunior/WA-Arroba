@@ -52,3 +52,6 @@ A simples abertura/consulta dos dados da instância não gera mais log. A consul
 ## Regra atual de reconexões — 19/11/2026
 Interrupções recuperáveis aguardam 60 segundos contínuos antes de gerar ocorrência, e-mail e alerta vermelho. Retorno antes desse tempo descarta a suspeita sem registrar par queda/reconexão na auditoria. Desconexão explícita, logout/401, sessão substituída/440, tentativas esgotadas ou QR exigido em instância já usada continuam imediatos. Mudanças de número e ações humanas continuam auditadas.
 connection_candidates persiste a espera; tentativas não reiniciam o prazo. O histórico padrão mostra quedas confirmadas. Reconexões breves anteriores identificáveis são preservadas como transient e consultáveis no filtro; e-mails já enviados não são apagados nem reenviados pela classificação. Leia ALERTAS.md antes de alterar esta regra.
+
+## Gerenciamento do cadastro — 19/11/2026
+Leia [INSTANCIAS.md](INSTANCIAS.md). Nome editável no topo de Gerenciar; desativação reversível com aba Desativadas, bloqueio de API/conexão/alertas e auditoria. Dados e histórico são preservados; reativar exige Conectar para retomar.

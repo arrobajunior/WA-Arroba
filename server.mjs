@@ -55,7 +55,7 @@ export async function createApp({dataDir=path.join(directory,'.data'),port=3210,
   const authorize=(user,row)=>{if(user.role!=='admin'&&user.id!==row.owner_id){activity.record({instance:row,actor:activity.userActor(user),action:'instance_access_denied',outcome:'denied',source:'panel'});throw fail(404,'not_found','Instância não encontrada.');}};
   const audited=(user,req,row,action,before,operation,after)=>activity.run({instance:row,actor:activity.userActor(user),action,before,source:'panel',peer_ip:req.socket.remoteAddress||''},operation,after);
   const counts=id=>{const result={total:0,queue:0,sent:0,unsent:0,unknown:0,sending:0};for(const r of db.prepare('SELECT status,count(*) AS n FROM messages WHERE instance_id=? GROUP BY status').all(id)){result[r.status]=r.n;result.total+=r.n;}return result;};
-  const serialize=(row,secret=false)=>({id:row.id,name:row.name,phone:row.phone,owner_id:row.owner_id,owner_name:db.prepare('SELECT name FROM users WHERE id=?').get(row.owner_id)?.name,created_at:row.created_at,status:transport.state(row.id).status,error:transport.state(row.id).error,first_connected_at:row.first_connected_at,last_connected_at:row.last_connected_at,connection_alert:db.prepare('SELECT id,opened_at,reason,notification_status FROM connection_incidents WHERE instance_id=? AND resolved_at IS NULL').get(row.id)||null,message_counts:counts(row.id),webhook_url:row.webhook_url||'',...(secret?{token:decrypt(row.token)}:{})});
+  const serialize=(row,secret=false)=>({id:row.id,name:row.name,phone:row.phone,owner_id:row.owner_id,owner_name:db.prepare('SELECT name FROM users WHERE id=?').get(row.owner_id)?.name,created_at:row.created_at,active:Boolean(row.active),disabled_at:row.disabled_at,disabled_by:row.disabled_by,status:row.active?transport.state(row.id).status:'disabled',error:row.active?transport.state(row.id).error:null,first_connected_at:row.first_connected_at,last_connected_at:row.last_connected_at,connection_alert:row.active?(db.prepare('SELECT id,opened_at,reason,notification_status FROM connection_incidents WHERE instance_id=? AND resolved_at IS NULL').get(row.id)||null):null,message_counts:counts(row.id),webhook_url:row.webhook_url||'',...(secret?{token:decrypt(row.token)}:{})});
   const compatibility=createCompatibilityApi({store:{...store,equalToken:equal},transport,relay:mediaRelay,baseUrl:mediaBaseUrl,legacy,json,fail,text,keys,body,webhookUrl,activity});
   let shuttingDown=false;
   const server=http.createServer(async(req,res)=>{
@@ -175,14 +175,27 @@ export async function createApp({dataDir=path.join(directory,'.data'),port=3210,
           return json(res,201,{instance:serialize(lookup(id),true)});
         }
         if(['/api/instances','/api/dashboard'].includes(pathname)&&method==='GET'){
-          const rows=session.role==='admin'?db.prepare('SELECT * FROM instances ORDER BY created_at DESC').all():db.prepare('SELECT * FROM instances WHERE owner_id=? ORDER BY created_at DESC').all(session.id);
-          const items=rows.map(r=>serialize(r));
-          if(pathname==='/api/instances')return json(res,200,{instances:items});
-          const c={instances:items.length,connected:0,queue:0,sent:0,messages:0,alerts:0};for(const i of items){if(i.connection_alert)c.alerts++;if(i.status==='authenticated')c.connected++;c.queue+=i.message_counts.queue;c.sent+=i.message_counts.sent;c.messages+=i.message_counts.total;}return json(res,200,{counts:c,instances:items});
+          const state=pathname==='/api/dashboard'?'active':url.searchParams.get('state')||'active';
+          if(!['active','disabled','all'].includes(state))throw fail(400,'invalid_state','Filtro de instâncias inválido.');
+          const visible=session.role==='admin'?db.prepare('SELECT * FROM instances ORDER BY created_at DESC').all():db.prepare('SELECT * FROM instances WHERE owner_id=? ORDER BY created_at DESC').all(session.id);
+          const totals={active:visible.filter(r=>r.active===1).length,disabled:visible.filter(r=>r.active===0).length};
+          const items=visible.filter(r=>state==='all'||r.active===(state==='active'?1:0)).map(r=>serialize(r));
+          if(pathname==='/api/instances')return json(res,200,{instances:items,totals});
+          const c={instances:items.length,disabled:totals.disabled,connected:0,queue:0,sent:0,messages:0,alerts:0};for(const i of items){if(i.connection_alert)c.alerts++;if(i.status==='authenticated')c.connected++;c.queue+=i.message_counts.queue;c.sent+=i.message_counts.sent;c.messages+=i.message_counts.total;}return json(res,200,{counts:c,instances:items});
         }
-        const match=pathname.match(/^\/api\/instances\/([a-f0-9]{8})(?:\/(qr|connect|disconnect|token|messages|activity|credential-access))?$/);
+        const match=pathname.match(/^\/api\/instances\/([a-f0-9]{8})(?:\/(qr|connect|disconnect|token|messages|activity|credential-access|lifecycle))?$/);
         if(match){const [,id,action]=match,row=lookup(id);authorize(session,row);
           if(!action&&method==='GET')return json(res,200,{instance:serialize(row,true)});
+          if(action==='lifecycle'&&method==='POST'){
+            const input=await body(req);keys(input,['active']);if(typeof input.active!=='boolean')throw fail(400,'invalid_field','Informe active como verdadeiro ou falso.');
+            const actionName=input.active?'instance_reactivated':'instance_deactivated';
+            const updated=await audited(session,req,row,actionName,{active:Boolean(row.active)},async()=>{
+              if(Boolean(lookup(id).active)!==input.active)db.prepare('UPDATE instances SET active=?,auto_connect=0,disabled_at=?,disabled_by=?,updated_at=? WHERE id=?').run(Number(input.active),input.active?null:new Date().toISOString(),input.active?null:session.id,new Date().toISOString(),id);
+              if(!input.active){try{alerts.deactivate(id);}finally{await transport.suspend(id);}}
+              return lookup(id);
+            },result=>({active:Boolean(result.active),disabled_at:result.disabled_at}));
+            return json(res,200,{instance:serialize(updated,true)});
+          }
           if(action==='activity'&&method==='GET')return json(res,200,activity.list(url.searchParams,id));
           if(action==='credential-access'&&method==='POST'){
             const input=await body(req);keys(input,['action']);if(!['reveal','copy'].includes(input.action))throw fail(400,'invalid_field','Ação inválida.');
@@ -198,9 +211,9 @@ export async function createApp({dataDir=path.join(directory,'.data'),port=3210,
             },activity.snapshot);return json(res,200,{instance:serialize(updated,true)});
           }
           if(action==='token'&&method==='POST'){await audited(session,req,row,'token_rotated',{},async()=>{keys(await body(req),[]);db.prepare('UPDATE instances SET token=? WHERE id=?').run(encrypt(randomBytes(32).toString('hex')),id);},()=>({token_rotated:true}));return json(res,200,{instance:serialize(lookup(id),true)});}
-          if(action==='connect'&&method==='POST'){await audited(session,req,row,'connection_requested',{},async context=>{keys(await body(req),[]);transport.connect(id,0,context);});return json(res,202,{instance:serialize(row,true)});}
-          if(action==='disconnect'&&method==='POST'){await audited(session,req,row,'disconnection_requested',{},async context=>{keys(await body(req),[]);await transport.disconnect(id,context);});return json(res,200,{instance:serialize(lookup(id),true)});}
-          if(action==='qr'&&method==='GET'){const s=transport.state(id);return json(res,200,{status:s.status,error:s.error,qr:s.qr?await QRCode.toDataURL(s.qr,{width:280,margin:2}):null});}
+          if(action==='connect'&&method==='POST'){await audited(session,req,row,'connection_requested',{},async context=>{keys(await body(req),[]);if(!lookup(id).active)throw fail(409,'instance_disabled','Reative a instância antes de conectar.');transport.connect(id,0,context);});return json(res,202,{instance:serialize(row,true)});}
+          if(action==='disconnect'&&method==='POST'){await audited(session,req,row,'disconnection_requested',{},async context=>{keys(await body(req),[]);if(!lookup(id).active)throw fail(409,'instance_disabled','Instância desativada.');await transport.disconnect(id,context);});return json(res,200,{instance:serialize(lookup(id),true)});}
+          if(action==='qr'&&method==='GET'){if(!row.active)return json(res,200,{status:'disabled',error:null,qr:null});const s=transport.state(id);return json(res,200,{status:s.status,error:s.error,qr:s.qr?await QRCode.toDataURL(s.qr,{width:280,margin:2}):null});}
           if(action==='messages'&&method==='GET'){activity.record({instance:row,actor:activity.userActor(session),action:'messages_viewed',outcome:'observed',source:'panel',peer_ip:req.socket.remoteAddress||''});return await listMessages(res,id,url);}
         }
         throw fail(404,'not_found','Endpoint não encontrado.');
@@ -208,7 +221,7 @@ export async function createApp({dataDir=path.join(directory,'.data'),port=3210,
       const relayRoute=pathname.match(/^\/instance([a-f0-9]{8})\/media\/([a-f0-9]{48})$/);
       if(relayRoute&&method==='GET'){
         const [,instanceId,key]=relayRoute,entry=mediaRelay.get(instanceId,key);
-        const active=db.prepare('SELECT users.active FROM users JOIN instances ON instances.owner_id=users.id WHERE instances.id=?').get(instanceId)?.active;
+        const active=db.prepare('SELECT users.active FROM users JOIN instances ON instances.owner_id=users.id WHERE instances.id=? AND instances.active=1').get(instanceId)?.active;
         if(!entry||active!==1)throw fail(404,'media_expired','Mídia temporária indisponível. O cliente deve salvar o arquivo ao receber o webhook.');
         res.writeHead(200,{'Content-Type':entry.mimetype,'Content-Length':entry.bytes.length,'Content-Disposition':"attachment; filename*=UTF-8''"+encodeURIComponent(entry.filename),'Cache-Control':'no-store'});return res.end(entry.bytes);
       }

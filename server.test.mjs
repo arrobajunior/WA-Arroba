@@ -8,7 +8,33 @@ import {once} from 'node:events';
 import {createApp} from './server.mjs';
 import {openStore} from './store.mjs';
 const admin={email:'admin@example.com',password:'administrator-test-password'};
-const fakeTransport=()=>({state:()=>({status:'disconnected',qr:null}),connect:()=>{},disconnect:async()=>{},flush:()=>{},restore:()=>{},close:async()=>{}});
+const fakeTransport=()=>({state:()=>({status:'disconnected',qr:null}),connect:()=>{},disconnect:async()=>{},flush:()=>{},restore:()=>{},close:async()=>{},suspend:async()=>{}});
+test('rename is cosmetic; deactivation hides the instance, blocks API and monitoring, and reactivation preserves identity',async t=>{
+ let change,dbRef,connects=0,suspends=0,logouts=0;const states=new Map();
+ const app=await fixture(t,{alertOptions:{graceMs:0},transportFactory:(store,options)=>{dbRef=store.db;change=(id,status,metadata={})=>{states.set(id,status);options.onConnectionState(id,status,'Test close',metadata);};return {...fakeTransport(),state:id=>({status:states.get(id)||'disconnected',qr:null}),connect:()=>{connects++;},disconnect:async()=>{logouts++;},suspend:async id=>{suspends++;states.set(id,'disconnected');}};}});
+ const root=await login(app);const createUser=async name=>{const credentials={email:name+'@example.com',password:name+'-long-test-password'};const user=(await app.request('/api/users',{method:'POST',cookie:root,data:{name,...credentials}})).body.user;return {user,cookie:await login(app,credentials)};};
+ const owner=await createUser('owner'),other=await createUser('other');
+ const i=(await app.request('/api/instances',{method:'POST',cookie:owner.cookie,data:{name:'Wrong name'}})).body.instance;
+ await app.request('/api/instances',{method:'POST',cookie:other.cookie,data:{name:'Other private'}});
+ const renamed=await app.request('/api/instances/'+i.id,{method:'PATCH',cookie:owner.cookie,data:{name:'Corrected name'}});assert.equal(renamed.status,200);assert.equal(renamed.body.instance.id,i.id);assert.equal(renamed.body.instance.token,i.token);assert.equal(connects,0);
+ change(i.id,'authenticated',{source:'whatsapp'});change(i.id,'disconnected',{source:'manual_disconnect'});assert.equal((await app.request('/api/dashboard',{cookie:owner.cookie})).body.counts.alerts,1);
+ assert.equal((await app.request('/api/instances/'+i.id+'/lifecycle',{method:'POST',cookie:other.cookie,data:{active:false}})).status,404);
+ assert.equal((await app.request('/api/instances/'+i.id+'/lifecycle',{method:'POST',cookie:root,data:{active:'false'}})).status,400);
+ const deactivated=await app.request('/api/instances/'+i.id+'/lifecycle',{method:'POST',cookie:root,data:{active:false}});assert.equal(deactivated.status,200);assert.equal(deactivated.body.instance.active,false);assert.equal(deactivated.body.instance.status,'disabled');assert.equal(deactivated.body.instance.token,i.token);assert.equal(suspends,1);assert.equal(logouts,0);
+ assert.equal((await app.request('/api/instances',{cookie:owner.cookie})).body.instances.length,0);const archived=(await app.request('/api/instances?state=disabled',{cookie:owner.cookie})).body;assert.equal(archived.instances.length,1);assert.deepEqual(archived.totals,{active:0,disabled:1});
+ assert.deepEqual((await app.request('/api/instances?state=disabled',{cookie:other.cookie})).body.totals,{active:1,disabled:0});
+ const dashboard=(await app.request('/api/dashboard',{cookie:owner.cookie})).body;assert.equal(dashboard.counts.instances,0);assert.equal(dashboard.counts.alerts,0);assert.equal(dashboard.counts.disabled,1);
+ const incidents=(await app.request('/api/general-admin/incidents',{cookie:root})).body;assert.equal(incidents.summary.open,0);assert.equal(incidents.summary.resolved,0);assert.equal(incidents.summary.deactivated,1);assert.equal(incidents.incidents[0].resolution_reason,'deactivated');
+ for(const [path,method,data] of [['instance/status','GET'],['instance/qrCode','GET'],['messages/chat','POST',{to:'5511999999999',body:'must not queue'}],['instance/restart','POST',{}]]){const response=await app.request('/instance'+i.id+'/'+path,{method,data:method==='POST'?{token:i.token,...data}:undefined,headers:{Authorization:'Bearer '+i.token}});assert.equal(response.status,409);assert.equal(response.body.error,'instance_disabled');}
+ assert.equal((await app.request('/instance'+i.id+'/instance/status',{headers:{Authorization:'Bearer wrong'}})).status,401);
+ assert.equal((await app.request('/api/instances/'+i.id+'/connect',{method:'POST',cookie:owner.cookie,data:{}})).status,409);assert.equal(connects,0);
+ assert.equal((await app.request('/api/instances/'+i.id+'/qr',{cookie:owner.cookie})).body.status,'disabled');assert.equal((await app.request('/api/instances/'+i.id+'/activity',{cookie:owner.cookie})).status,200);assert.equal((await app.request('/api/instances/'+i.id+'/messages',{cookie:owner.cookie})).status,200);
+ const disabledAt=deactivated.body.instance.disabled_at;await app.request('/api/instances/'+i.id+'/lifecycle',{method:'POST',cookie:owner.cookie,data:{active:false}});assert.equal((await app.request('/api/instances/'+i.id,{cookie:owner.cookie})).body.instance.disabled_at,disabledAt);
+ const reactivated=await app.request('/api/instances/'+i.id+'/lifecycle',{method:'POST',cookie:owner.cookie,data:{active:true}});assert.equal(reactivated.status,200);assert.equal(reactivated.body.instance.active,true);assert.equal(reactivated.body.instance.token,i.token);assert.equal(reactivated.body.instance.id,i.id);assert.equal(connects,0);assert.equal(dbRef.prepare('SELECT auto_connect FROM instances WHERE id=?').get(i.id).auto_connect,0);
+ assert.equal((await app.request('/api/instances',{cookie:owner.cookie})).body.instances.length,1);assert.equal((await app.request('/instance'+i.id+'/instance/status',{headers:{Authorization:'Bearer '+i.token}})).status,200);
+ const log=(await app.request('/api/instances/'+i.id+'/activity?limit=100',{cookie:owner.cookie})).body.events;assert.ok(log.some(e=>e.action==='instance_deactivated'&&e.actor_email===admin.email&&e.outcome==='success'));assert.ok(log.some(e=>e.action==='instance_reactivated'&&e.actor_id===owner.user.id&&e.outcome==='success'));
+ await app.request('/api/instances/'+i.id+'/connect',{method:'POST',cookie:owner.cookie,data:{}});assert.equal(connects,1);
+});
 test('quick natural reconnects do not email, flag dashboard, count as outages or spam the activity log',async t=>{
  let clock=Date.now(),emit;const states=new Map(),sent=[];
  const app=await fixture(t,{alertOptions:{now:()=>clock,mailReady:()=>true,sendEmail:async input=>{sent.push(input);return {}; }},transportFactory:(_store,options)=>{emit=(id,status,metadata={})=>{states.set(id,status);options.onConnectionState(id,status,'Natural reconnect',metadata);};return {...fakeTransport(),state:id=>({status:states.get(id)||'disconnected',qr:null})};}});

@@ -37,6 +37,7 @@ export function openStore(directory) {
     if(!columns(table).includes(column))db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   }
   // Only the legacy master is promoted during the one-time schema migration.
+  for(const [name,definition] of [['active','INTEGER NOT NULL DEFAULT 1'],['disabled_at','TEXT'],['disabled_by','TEXT']])if(!columns('instances').includes(name))db.exec(`ALTER TABLE instances ADD COLUMN ${name} ${definition}`);
   for(const name of ['first_connected_at','last_connected_at'])if(!columns('instances').includes(name))db.exec(`ALTER TABLE instances ADD COLUMN ${name} TEXT`);
   // Existing phones/registered credentials are evidence of a past connection.
   for(const row of db.prepare('SELECT id,phone,updated_at FROM instances WHERE first_connected_at IS NULL').all()){
@@ -75,6 +76,7 @@ export function openStore(directory) {
     // Preserve old notifications and timestamps, but stop counting proven brief auto-reconnections as outages.
     db.exec("UPDATE connection_incidents SET outage_kind='transient' WHERE resolved_at IS NOT NULL AND source='whatsapp' AND disconnect_code IN (408,428,500,503,515) AND julianday(resolved_at)>=julianday(opened_at) AND ROUND((julianday(resolved_at)-julianday(opened_at))*86400000)<60000");
   }
+  if(!columns('connection_incidents').includes('resolution_reason'))db.exec("ALTER TABLE connection_incidents ADD COLUMN resolution_reason TEXT NOT NULL DEFAULT ''");
   db.exec('CREATE TABLE IF NOT EXISTS schema_migrations(name TEXT PRIMARY KEY)');
   const hasActivity=Boolean(db.prepare("SELECT name FROM schema_migrations WHERE name='instance_activity_v1'").get());
   db.exec(`CREATE TABLE IF NOT EXISTS instance_activity(id INTEGER PRIMARY KEY AUTOINCREMENT,created_at TEXT NOT NULL,instance_id TEXT,instance_name TEXT NOT NULL DEFAULT '',actor_id TEXT NOT NULL DEFAULT '',actor_name TEXT NOT NULL,actor_email TEXT NOT NULL DEFAULT '',actor_role TEXT NOT NULL DEFAULT '',actor_kind TEXT NOT NULL,action TEXT NOT NULL,outcome TEXT NOT NULL,source TEXT NOT NULL,request_id TEXT NOT NULL DEFAULT '',before_value TEXT NOT NULL DEFAULT '{}',after_value TEXT NOT NULL DEFAULT '{}',details TEXT NOT NULL DEFAULT '{}',peer_ip TEXT NOT NULL DEFAULT '',legacy_key TEXT UNIQUE);

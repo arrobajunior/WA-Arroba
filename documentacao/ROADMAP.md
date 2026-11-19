@@ -82,3 +82,12 @@ Não foi feita atualização da biblioteca Baileys.
 - [x] 61 testes aprovados; limites de tempo, persistência, auditoria e regressões de interface verificados.
 - [ ] Confirmar implantação e observar ocorrências reais futuras: a estação intencionalmente desconectada deve permanecer em alerta; reconexões de poucos segundos não devem disparar novos e-mails.
 - [ ] Não remover a tolerância nem voltar a enviar no primeiro close. Não apagar registros/e-mails antigos para esconder falsos positivos.
+
+## Nome e desativação — ponto atual de retomada
+- [x] Nome editável com identidade técnica preservada.
+- [x] Desativação/reativação auditada e abas separadas.
+- [x] Bloqueio de API e reconexões, preservando dados/chaves/fila.
+- [x] Quedas encerradas por desativação separadas de reconexão.
+- [x] 64 testes automatizados aprovados.
+- [ ] Conferir implantação deste recurso e homologar com instância de teste autorizada; reativar não conecta sozinho.
+- [ ] Registrar resultados operacionais futuros sem tokens nem dados pessoais.

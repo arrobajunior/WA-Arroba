@@ -13,7 +13,7 @@ export function createInstanceActivity(db,{now=Date.now}={}){
  const snapshot=row=>{
    let settings={};try{settings=JSON.parse(row.settings||'{}');}catch{}
    const allowed={};for(const key of ['sendDelay','sendDelayMax','webhook_message_received','webhook_message_create','webhook_message_ack','webhook_message_download_media'])if(Object.hasOwn(settings,key))allowed[key]=settings[key];
-   return {name:row.name,owner_id:row.owner_id,webhook:webhookFingerprint(row.webhook_url||''),settings:allowed};
+   return {name:row.name,owner_id:row.owner_id,active:Boolean(row.active),webhook:webhookFingerprint(row.webhook_url||''),settings:allowed};
  };
  function record({instance,actor=system,action,outcome='observed',source='system',request_id='',before={},after={},details={},peer_ip=''}){
    return Number(db.prepare('INSERT INTO instance_activity(created_at,instance_id,instance_name,actor_id,actor_name,actor_email,actor_role,actor_kind,action,outcome,source,request_id,before_value,after_value,details,peer_ip) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(new Date(now()).toISOString(),instance?.id||null,instance?.name||'',actor.id||'',actor.name,actor.email||'',actor.role||'',actor.kind,action,outcome,source,request_id,JSON.stringify(before),JSON.stringify(after),JSON.stringify(details),String(peer_ip).slice(0,64)).lastInsertRowid);

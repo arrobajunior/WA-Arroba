@@ -71,3 +71,11 @@
 - Acrescentado filtro Classificação: quedas confirmadas (padrão), reconexões breves anteriores e todos os registros. Resumos/padrões usam a classificação escolhida.
 - Cancelado timer antigo de tentativa quando o socket já recuperou, evitando reconexão forçada desnecessária. Verificação de uma ocorrência já aberta após reiniciar não gera novo evento de queda nem novo e-mail.
 - Validação: 61 testes na suíte aprovados, mais verificações focadas no limite exato de 60s e não repetição em verificação de startup; DOM local passou em filtros, detalhes, paginação, auditoria e histórico. SMTP e WhatsApp simulados; nenhum canal real foi desconectado para teste.
+
+## 19/11/2026 — Nome e ciclo de ativação
+- Edição de nome destacada no topo de Gerenciar, sem alterar ID/token/URL.
+- Desativar/reativar com confirmação, abas Ativas/Desativadas e autoria auditada.
+- Socket, API, fila e restauração automática respeitam desativação; sessão e dados preservados. Reativação não conecta automaticamente.
+- Monitoramento inativo não dispara alertas; queda aberta termina por desativação, separada de recuperação real.
+- 64 testes automatizados aprovados. Ver INSTANCIAS.md. Publicação/implantação e homologação real são etapas distintas; verificar commit e status Railway antes de afirmar implantação.
+- Implantação anterior da tolerância de 60s: SUCCESS (2c4d98d9-0f26-454f-a1bb-cb2ebb30ae0e, commit 7351d1b).

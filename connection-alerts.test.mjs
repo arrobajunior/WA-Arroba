@@ -9,6 +9,13 @@ import {alertMessage,sendAlertEmail} from './alert-email.mjs';
 import {createIncidentHistory} from './incident-history.mjs';
 
 const actor={id:'admin',name:'Test Admin',email:'admin@example.com'};
+test('deactivation cancels pending grace and ends existing monitoring without pretending the connection recovered',async t=>{
+ const {store,alerts,sent,advance}=await fixture(t,{graceMs:undefined});alerts.updateEmail(actor,'team@example.com');alerts.stateChanged('aaaa1111','authenticated');alerts.stateChanged('aaaa1111','disconnected','Brief close',{source:'whatsapp',code:428});
+ store.db.prepare("UPDATE instances SET active=0 WHERE id='aaaa1111'").run();alerts.deactivate('aaaa1111');advance(120000);await alerts.drain();assert.equal(sent.length,0);assert.equal(store.db.prepare('SELECT count(*) AS n FROM connection_candidates').get().n,0);assert.equal(store.db.prepare('SELECT count(*) AS n FROM connection_incidents').get().n,0);
+ alerts.stateChanged('bbbb2222','authenticated');alerts.stateChanged('bbbb2222','disconnected','Session ended',{source:'whatsapp',code:401});await alerts.drain();assert.equal(sent.length,1);
+ store.db.prepare("UPDATE instances SET active=0 WHERE id='bbbb2222'").run();alerts.deactivate('bbbb2222');const history=createIncidentHistory(store.db).list();assert.equal(history.summary.open,0);assert.equal(history.summary.resolved,0);assert.equal(history.summary.deactivated,1);assert.equal(history.incidents[0].notification_status,'sent');assert.equal(history.incidents[0].resolution_reason,'deactivated');
+ const checked=[];alerts.reconcile(id=>{checked.push(id);return {status:'disconnected'};});await alerts.drain();assert.deepEqual(checked,[]);assert.equal(sent.length,1);
+});
 test('production grace ignores 3s and 10s recoverable reconnects without incidents, email or audit loss events',async t=>{
  const observed=[];const {store,alerts,sent,advance}=await fixture(t,{graceMs:undefined,onConnectionEvent:(...args)=>observed.push(args)});alerts.updateEmail(actor,'team@example.com');
  alerts.stateChanged('aaaa1111','authenticated');

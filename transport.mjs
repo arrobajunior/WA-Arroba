@@ -74,6 +74,7 @@ export function createTransport(store, { socketFactory=makeWASocket, retryDelay=
   }
   function connect(id,attempt=0,auditContext=null) {
     if(closed)throw new Error('Aplicação em encerramento.');
+    if(db.prepare('SELECT active FROM instances WHERE id=?').get(id)?.active!==1)throw Object.assign(new Error('Reative a instância antes de conectar.'),{status:409,code:'instance_disabled'});
     const previous=entries.get(id);
     if(previous&&['initialize','qr','authenticated','retrying','disconnecting'].includes(previous.status)&&!attempt)return state(id);
     if(previous){clearTimeout(previous.timer);previous.socket?.end(new Error('Substituição controlada da conexão.'));}
@@ -190,7 +191,7 @@ export function createTransport(store, { socketFactory=makeWASocket, retryDelay=
     const run=(async()=>{
       while(!closed){
         const e=entries.get(id);if(e?.status!=='authenticated')return;
-        if(db.prepare('SELECT users.active FROM users JOIN instances ON instances.owner_id=users.id WHERE instances.id=?').get(id)?.active!==1)return;
+        if(db.prepare('SELECT users.active FROM users JOIN instances ON instances.owner_id=users.id WHERE instances.id=? AND instances.active=1').get(id)?.active!==1)return;
         db.prepare("UPDATE messages SET status='expired',error='Mensagem expirou após 24 horas na fila.' WHERE instance_id=? AND status='queue' AND COALESCE(queued_at,CAST(strftime('%s',created_at) AS INTEGER))<?").run(id,Math.floor(Date.now()/1000)-86400);
         const row=db.prepare("SELECT * FROM messages WHERE instance_id=? AND status='queue' ORDER BY priority,created_at,id LIMIT 1").get(id);if(!row)return;
         const providerId=generateMessageID();
@@ -218,6 +219,7 @@ export function createTransport(store, { socketFactory=makeWASocket, retryDelay=
           else if(row.type==='location')content={location:{degreesLatitude:payload.lat,degreesLongitude:payload.lng,address:payload.address}};
           else if(row.type==='vcard')content={contacts:{displayName:'Contato',contacts:[{vcard:payload.vcard}]}};
           else if(row.type==='contact')content={contacts:{displayName:'Contatos',contacts:payload.contacts}};
+          if(db.prepare('SELECT active FROM instances WHERE id=?').get(id)?.active!==1){db.prepare("UPDATE messages SET status='queue',provider_id=NULL WHERE id=? AND status='sending'").run(row.id);return;}
           await e.socket.sendMessage(jid,content,{messageId:providerId});
           // A successful send call alone is not delivery confirmation. Preserve any ACK received during the call.
           if(!closed)db.prepare("UPDATE messages SET status='sent',sent_at=COALESCE(sent_at,?) WHERE id=? AND status='sending'").run(Math.floor(Date.now()/1000),row.id);
@@ -238,10 +240,10 @@ export function createTransport(store, { socketFactory=makeWASocket, retryDelay=
     })();
     work.set(id,run);run.catch(()=>{const e=entries.get(id);if(e)e.error='Falha ao processar fila.';}).finally(()=>work.delete(id));
   }
-  const required=id=>{const e=entries.get(id);if(e?.status!=='authenticated')throw Object.assign(new Error('WhatsApp não está conectado.'),{status:409,code:'not_authenticated'});return e;};
+  const required=id=>{if(db.prepare('SELECT active FROM instances WHERE id=?').get(id)?.active!==1)throw Object.assign(new Error('Instância desativada.'),{status:409,code:'instance_disabled'});const e=entries.get(id);if(e?.status!=='authenticated')throw Object.assign(new Error('WhatsApp não está conectado.'),{status:409,code:'not_authenticated'});return e;};
   const checkedJid=value=>{if(typeof value!=='string'||!/^\+?\d[0-9-]*(?:@(c\.us|g\.us|s\.whatsapp\.net|lid))?$/.test(value))throw Object.assign(new Error('chatId inválido.'),{status:400,code:'invalid_chat'});return whatsappJid(value);};
   async function me(id){const e=required(id),user=e.socket.user||{},jid=publicJid(user.id||'');let image='';try{image=await e.socket.profilePictureUrl(whatsappJid(jid),'image');}catch{}return {id:jid,name:user.name||user.verifiedName||'',number:jid.split('@')[0],image};}
-  async function restart(id,auditContext=null){const e=entries.get(id);if(e){entries.delete(id);clearTimeout(e.timer);e.wake?.();e.socket?.end(new Error('Reinício solicitado.'));}await work.get(id);return connect(id,0,auditContext);}
+  async function restart(id,auditContext=null){if(db.prepare('SELECT active FROM instances WHERE id=?').get(id)?.active!==1)throw Object.assign(new Error('Instância desativada.'),{status:409,code:'instance_disabled'});const e=entries.get(id);if(e){entries.delete(id);clearTimeout(e.timer);e.wake?.();e.socket?.end(new Error('Reinício solicitado.'));}await work.get(id);return connect(id,0,auditContext);}
   function messageKey(e,msgId){
     const found=e.messages.get(msgId)||[...e.messages.values()].find(m=>webhookId(m.key.remoteJid,m.key.id,m.key.fromMe)===msgId);
     let key=found?.key;
@@ -289,6 +291,7 @@ export function createTransport(store, { socketFactory=makeWASocket, retryDelay=
     throw Object.assign(new Error('Operação não implementada.'),{status:501,code:'not_implemented'});
   }
   async function reset(id,auditContext=null){
+    if(db.prepare('SELECT active FROM instances WHERE id=?').get(id)?.active!==1)throw Object.assign(new Error('Instância desativada.'),{status:409,code:'instance_disabled'});
     const e=entries.get(id);if(e?.status==='authenticated')await disconnect(id,auditContext);
     else if(e){entries.delete(id);clearTimeout(e.timer);e.wake?.();e.socket?.end(new Error('Reset solicitado.'));}
     await work.get(id);
@@ -305,6 +308,7 @@ export function createTransport(store, { socketFactory=makeWASocket, retryDelay=
     db.prepare('DELETE FROM wa_keys WHERE instance_id=?').run(id);db.prepare('UPDATE instances SET auto_connect=0,phone=? WHERE id=?').run('',id);
   }
   async function close(){closed=true;for(const e of entries.values()){clearTimeout(e.timer);e.wake?.();e.socket?.end(new Error('Servidor encerrando.'));}await Promise.allSettled([...work.values()]);entries.clear();mediaRelay.close();}
-  function restore(){for(const {id} of db.prepare('SELECT id FROM instances WHERE auto_connect=1').all())try{connect(id);}catch{/* visible disconnected state; manual recovery */}}
-  return {state,connect,disconnect,flush,restore,close,me,restart,react,deleteMessage,operation,reset};
+  async function suspend(id){const e=entries.get(id);if(e){entries.delete(id);clearTimeout(e.timer);e.wake?.();e.socket?.end(new Error('Instância desativada.'));}db.prepare('UPDATE instances SET auto_connect=0 WHERE id=?').run(id);await work.get(id);}
+  function restore(){for(const {id} of db.prepare('SELECT id FROM instances WHERE auto_connect=1 AND active=1').all())try{connect(id);}catch{/* visible disconnected state; manual recovery */}}
+  return {state,connect,disconnect,flush,restore,close,me,restart,react,deleteMessage,operation,reset,suspend};
 }

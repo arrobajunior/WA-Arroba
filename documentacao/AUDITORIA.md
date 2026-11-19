@@ -61,3 +61,6 @@ DOM local verificou aba, mostrar/renovar token, log central, filtros, paginaçã
 ## Reconexões automáticas breves — atualização de 19/11/2026
 O controlador de alertas filtra as oscilações recuperáveis antes de chamar a auditoria de conexão. Interrupção que recupera em menos de 60s não gera par connection_lost/connection_established nem registros intermediários de retry. Uma interrupção confirmada após a tolerância e as situações terminais/explicitamente solicitadas continuam registradas.
 A recuperação breve ainda atualiza o último telefone confirmado; se o número realmente mudou, connection_number_changed é registrado mesmo com a confirmação rotineira suprimida. Contextos explícitos de pedidos humanos continuam auditáveis. Startup não repete queda de ocorrência que já estava aberta. Registros antigos já gravados não são apagados; a classificação transient afeta o histórico de quedas, não altera a tabela de auditoria apenas de acréscimo.
+
+## Ciclo de ativação — 19/11/2026
+Renomear mantém a auditoria de alteração do cadastro. instance_deactivated e instance_reactivated registram autor, antes/depois e resultado. Visitas comuns continuam sem log; Mensagens continua auditada. Veja INSTANCIAS.md.
