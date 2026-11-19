@@ -19,7 +19,7 @@ Não houve acesso a conversas reais, leitura de segredos, conexão ao PostgreSQL
 
 ## Testes
 npm test: suíte operacional existente (64 testes).
-npm run test:postgres: 17 testes (6 de transferência + 11 da camada assíncrona/repositórios). Usam PostgreSQL embarcado PGlite com dados sintéticos; concorrência entre conexões também tem teste de isolamento com pool simulado. Cobrem backup/WAL, chaves, blobs, Unicode, IDs, rollback, privilégios, auditoria, horários e erros sem conteúdo sensível.
+npm run test:postgres: 26 testes (6 de transferência + 11 da camada assíncrona/repositórios + 9 de controle/HTTP). Usam PostgreSQL embarcado PGlite com dados sintéticos; concorrência entre conexões também tem teste de isolamento com pool simulado. Cobrem backup/WAL, chaves, blobs, Unicode, IDs, rollback, privilégios, auditoria, horários e erros sem conteúdo sensível.
 Não é uma validação da conexão TCP/TLS nem do PostgreSQL real provisionado. Não é teste de capacidade para 100 sessões nem homologação WhatsApp real.
 
 ## Comandos de ensaio — só com dados sintéticos/cópia autorizada
@@ -78,3 +78,26 @@ Continuam pendentes todos os ensaios operacionais de envio/ACK/webhooks, pausa/d
 - https://node-postgres.com/features/transactions
 - https://node-postgres.com/apis/pool
 - Código e testes desta branch.
+
+## Cadastro e autenticação — 19/11/2026, terceira etapa
+Autorização continua limitada à preparação em branch separada. Não houve deploy, alteração de variáveis ou acesso aos dados reais.
+
+### Implementado
+- postgres/accounts.mjs: login com scrypt, sessão de 12h cujo identificador é persistido como hash, logout, listagem/criação/alteração de usuários e invalidação de sessões por senha/e-mail/perfil/bloqueio. Mantém ADMIN/USER/Master; somente o próprio Master pode alterar sua conta, sem bloqueio/rebaixamento.
+- Login relê e bloqueia a conta depois da validação assíncrona da senha antes de emitir sessão, evitando aceitar credencial que tenha sido trocada/bloqueada enquanto o hash era verificado. Atualização de contas bloqueia linhas em ordem determinística.
+- Limite de tentativas mantém regra atual de 20 por usuário/IP em 15min, armazenamento em memória por processo e IP do socket (não confia em X-Forwarded-For). Isso ainda não é um limitador distribuído.
+- postgres/instances.mjs: cadastro, listagem/dashboard, consulta, nome/webhook e renovação de token com queries parametrizadas e autoria real. Visita comum continua sem log; consulta de atividade respeita escopo de instância.
+- Cadastro e auditoria de sucesso são atômicos; falha ao persistir auditoria desfaz a criação. Limite por proprietário protegido por advisory lock transacional, e colisão de ID tem tentativas limitadas. Padrão continua 50 por proprietário; parâmetro perOwnerLimit permite ensaiar outros limites. Isso não comprova capacidade para 100 sessões conectadas.
+- Nome não muda ID/token; token é criptografado e nunca aparece no log. Listagens não devolvem token. Dashboard e abas consultam contagens/alertas em lote (sem uma consulta de contagem por instância).
+- postgres/branding.mjs: identidade visual assíncrona com gravação atômica, imagem decodificada/reconvertida para PNG, limites de tamanho/pixels e remoção por slot. Permissão Master fica na rota, como no servidor atual.
+- postgres/control-api.mjs: roteador HTTP preparatório para login/me/logout, usuários, cadastro/detalhes/edição/token de instâncias, dashboard, identidade visual, auditoria e histórico de quedas. Confere Host, origem/marcador CSRF nas mutações, sessão, permissões e corpo limitado; erros internos não devolvem SQL/dados privados. Não é um servidor novo e NÃO é importado pelo server.mjs.
+- O roteador retorna false para rotas não cobertas, para futura composição explícita. Não trata envio, mensagens, QR, conexão, logout WhatsApp, desativação/reativação nem configuração/envio de e-mail. Não usar como substituto completo da aplicação.
+
+### Validação
+26 testes PostgreSQL locais aprovados e 64 testes existentes SQLite aprovados. Os 9 novos testes exercitam HTTP real em loopback e PostgreSQL embarcado PGlite com dados sintéticos: sessão/hash/cookie/expiração, Host/CSRF, proteção Master, revogação de sessão, escopo de proprietários/ADMIN, identidade/token, auditoria, quota, consultas em lote, branding, rate limit, mudança de senha concorrente, rollback com falha de auditoria, e-mail duplicado e texto com aparência de SQL tratado como dado.
+Cookie Secure foi verificado no cabeçalho; não houve ensaio HTTPS/TLS real. O motor embarcado usa uma conexão serializada por fixture: os testes de quota HTTP não substituem ensaio com múltiplas conexões PostgreSQL reais.
+Nenhuma sessão WhatsApp foi aberta e nenhum e-mail/webhook real foi disparado.
+
+### Próximo ponto concreto de retomada
+Portar alertas de 60s e transporte/fila/wa_keys para PostgreSQL assíncrono, garantindo ordenação dos eventos/credenciais e dono único da sessão. Depois compor o servidor HTTP completo com a API de integração e todas as rotas restantes; fazer ensaio ponta a ponta e de pausa/drenagem antes de selecionar backend ou preparar virada.
+Mantêm-se todos os bloqueios de implantação das seções anteriores. Não fazer merge em main nem executar importação final só porque as rotas de cadastro passaram.

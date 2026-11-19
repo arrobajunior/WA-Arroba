@@ -90,3 +90,10 @@ Usuário autorizou adiantar sem subir. Criados schema de transferência, snapsho
 - Validação: 17 testes PostgreSQL locais (PGlite e pool simulado) e 64 testes operacionais SQLite aprovados. Sem teste TCP/TLS do serviço real, sessões reais ou capacidade 100+.
 - Mantidos server.mjs, store.mjs e demais módulos operacionais atuais sem alteração. Backend PostgreSQL ainda não selecionável pelo servidor; não houve migração ou deploy.
 - Próximo: portar autenticação, cadastro/rotas, branding, alertas e transporte/fila/credenciais, concluir regressões e pausa/drenagem. Ver POSTGRESQL.md. Branch isolada; main permanece ccc85f1.
+
+## 19/11/2026 — Contas, cadastro e rotas HTTP para PostgreSQL
+- Portados login/sessões/usuários, cadastro/listagem/detalhes/nome/webhook/token de instâncias e identidade visual, com módulo HTTP preparatório não ligado ao servidor atual.
+- Preservados perfis/Master, revogação de sessão, ID/token no rename, token criptografado, auditoria e ausência de log em visitas comuns.
+- Adicionados rechecagem de conta após scrypt, locks determinísticos, limite de criação por proprietário atômico e contagens/alertas de listagem em lote.
+- 26 testes PostgreSQL locais (incluindo 9 de controle/HTTP) e 64 testes SQLite aprovados; dados sintéticos e HTTP em loopback. Sem TCP/TLS do banco Railway nem sessão WhatsApp real.
+- Nenhuma alteração em main/deploy/variáveis/dados reais. Próximo: alertas e transporte/fila/wa_keys, composição de servidor e API de integração, ensaio completo/pausa antes da virada. Detalhes e limites em POSTGRESQL.md.

@@ -61,3 +61,6 @@ Leia [POSTGRESQL.md](POSTGRESQL.md). Transferência e testes adiantados a pedido
 
 ## PostgreSQL — adaptação iniciada, sem deploy
 Implementados cliente assíncrono/pool/transações, carregamento seguro da chave existente, validação do store e repositórios de auditoria e histórico de quedas. 17 testes PostgreSQL locais passaram e 64 testes atuais continuam passando. Os novos módulos ainda não estão ligados ao servidor: produção segue SQLite. Leia POSTGRESQL.md e continue por autenticação/cadastro/rotas, depois transporte/fila/alertas. Não fazer merge/deploy antes do aviso do Arroba e dos ensaios completos.
+
+## PostgreSQL — cadastro e autenticação preparados
+Além da fundação, foram criados repositórios assíncronos de contas/instâncias/branding e um roteador HTTP preparatório, testados localmente. Suíte PostgreSQL: 26 testes; suíte SQLite: 64 testes. O servidor de produção não usa esses módulos. Próximo: alertas, transporte/fila/credenciais e composição das rotas restantes. Ver POSTGRESQL.md; não publicar main nem migrar dados reais ainda.

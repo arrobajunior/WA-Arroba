@@ -1,0 +1,93 @@
+import {sessionToken,publicUser} from '../auth.mjs';
+import {createPostgresAccounts} from './accounts.mjs';
+import {createPostgresInstances} from './instances.mjs';
+import {createPostgresInstanceActivity} from './instance-activity.mjs';
+import {createPostgresIncidentHistory} from './incident-history.mjs';
+import {createPostgresBranding} from './branding.mjs';
+import {fail,keys} from './validation.mjs';
+
+const json=(res,status,data)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8'});res.end(JSON.stringify(data));};
+async function body(req,max=65536){
+  let size=0;const chunks=[];
+  for await(const chunk of req){size+=chunk.length;if(size>max)throw fail(413,'body_too_large','Corpo muito grande.');chunks.push(chunk);}
+  const raw=Buffer.concat(chunks).toString('utf8');if(!raw)return {};
+  const type=(req.headers['content-type']||'').split(';')[0];let value;
+  if(type==='application/x-www-form-urlencoded')value=Object.fromEntries(new URLSearchParams(raw));
+  else if(type==='application/json'){try{value=JSON.parse(raw);}catch{throw fail(400,'invalid_json','JSON inválido.');}}
+  else throw fail(415,'unsupported_type','Use JSON ou formulário.');
+  if(!value||typeof value!=='object'||Array.isArray(value))throw fail(400,'invalid_body','Envie um objeto.');return value;
+}
+
+// Preparatory router only: not imported by server.mjs and never starts a WhatsApp session.
+// A future HTTP server must explicitly call it; false means this route belongs to another module.
+export async function createPostgresControlApi({store,origin,state,now=Date.now,perOwnerLimit=50,onUserEnabled=async()=>{}}={}){
+  let base;try{base=new URL(origin);}catch{throw new Error('INVALID_PUBLIC_ORIGIN');}
+  if(!['http:','https:'].includes(base.protocol)||base.username||base.password||base.pathname!=='/'||base.search||base.hash)throw new Error('INVALID_PUBLIC_ORIGIN');
+  const {db}=store,activity=createPostgresInstanceActivity(db,{now}),history=createPostgresIncidentHistory(db,{now}),branding=createPostgresBranding(db);
+  const accounts=await createPostgresAccounts(db,{now}),instances=createPostgresInstances(store,{activity,state,now,perOwnerLimit});
+  const cookie=(token,maxAge)=>`wa_session=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${base.protocol==='https:'?'; Secure':''}`;
+  return async function handle(req,res){
+    const path=(req.url||'/').split('?')[0],userMatch=path.match(/^\/api\/users\/([a-f0-9]{24})$/),instanceMatch=path.match(/^\/api\/instances\/([a-f0-9]{8})(?:\/(token|activity|credential-access))?$/),incidentMatch=path.match(/^\/api\/general-admin\/incidents\/(\d+)$/),assetMatch=path.match(/^\/brand-assets\/(positive|negative|favicon)\.png$/);
+    const known=['/api/auth/login','/api/auth/me','/api/auth/logout','/api/users','/api/instances','/api/dashboard','/api/branding','/api/general-admin/activity','/api/general-admin/incidents'].includes(path)||userMatch||instanceMatch||incidentMatch||assetMatch;
+    if(!known)return false;
+    res.setHeader('Cache-Control','no-store');res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','no-referrer');
+    try{
+      if(req.headers.host!==base.host)throw fail(403,'invalid_host','Host não permitido.');
+      if(!['GET','POST','PATCH'].includes(req.method))throw fail(405,'method_not_allowed','Método não permitido.');
+      if(['POST','PATCH'].includes(req.method)&&((req.headers.origin&&req.headers.origin!==base.origin)||req.headers['x-requested-with']!=='wa-platform'))throw fail(403,'csrf_rejected','Origem não permitida.');
+      const url=new URL(req.url,base.origin),method=req.method;
+      if(path==='/api/branding'&&method==='GET'){json(res,200,{branding:await branding.read()});return true;}
+      if(assetMatch&&method==='GET'){
+        const data=await branding.asset(assetMatch[1]);if(!data)throw fail(404,'not_found','Imagem não encontrada.');res.writeHead(200,{'Content-Type':'image/png'});res.end(data);return true;
+      }
+      const token=sessionToken(req);
+      if(path==='/api/auth/login'&&method==='POST'){
+        const result=await accounts.login(await body(req),{ip:req.socket.remoteAddress||'',previousToken:token});res.setHeader('Set-Cookie',cookie(result.token,result.maxAge));json(res,200,{user:result.user});return true;
+      }
+      const actor=await accounts.current(token);if(!actor)throw fail(401,'unauthorized','Faça login para continuar.');
+      const metadata={peer_ip:req.socket.remoteAddress||''};
+      if(path==='/api/auth/me'&&method==='GET'){json(res,200,{user:publicUser(actor)});return true;}
+      if(path==='/api/auth/logout'&&method==='POST'){keys(await body(req),[]);await accounts.logout(token);res.setHeader('Set-Cookie',cookie('',0));json(res,200,{ok:true});return true;}
+      if(path==='/api/users'){
+        if(method==='GET'){json(res,200,{users:await accounts.list(actor)});return true;}
+        if(method==='POST'){if(actor.role!=='admin')throw fail(403,'forbidden','Acesso administrativo necessário.');json(res,201,{user:await accounts.create(actor,await body(req))});return true;}
+      }
+      if(userMatch&&method==='PATCH'){
+        if(actor.role!=='admin')throw fail(403,'forbidden','Acesso administrativo necessário.');
+        const result=await accounts.update(actor,userMatch[1],await body(req));
+        // Callback is optional and supplied only when an async transport is ready. Persisted change is not retried.
+        await onUserEnabled(result.resumeInstanceIds);json(res,200,{user:result.user});return true;
+      }
+      if(path==='/api/branding'&&method==='PATCH'){
+        if(!actor.is_master)throw fail(403,'forbidden','Somente o Admin Master pode alterar a identidade visual.');json(res,200,{branding:await branding.update(await body(req,4500000))});return true;
+      }
+      if(path==='/api/instances'&&method==='POST'){json(res,201,{instance:await instances.create(actor,await body(req),metadata)});return true;}
+      if(['/api/instances','/api/dashboard'].includes(path)&&method==='GET'){json(res,200,await instances.list(actor,{filter:url.searchParams.get('state')||'active',dashboard:path==='/api/dashboard'}));return true;}
+      if(instanceMatch){
+        const [,id,action]=instanceMatch;
+        if(!action&&method==='GET'){json(res,200,{instance:await instances.get(actor,id)});return true;}
+        if(!action&&method==='PATCH'){json(res,200,{instance:await instances.patch(actor,id,await body(req),metadata)});return true;}
+        if(action==='token'&&method==='POST'){json(res,200,{instance:await instances.rotate(actor,id,await body(req),metadata)});return true;}
+        if(action==='activity'&&method==='GET'){await instances.authorized(actor,id);json(res,200,await activity.list(url.searchParams,id));return true;}
+        if(action==='credential-access'&&method==='POST'){
+          const input=await body(req);keys(input,['action']);if(!['copy','reveal'].includes(input.action))throw fail(400,'invalid_field','Ação inválida.');
+          const {row,user}=await instances.authorized(actor,id);await activity.record({instance:row,actor:activity.userActor(user),action:input.action==='copy'?'token_copy_requested':'token_reveal_requested',outcome:'requested',source:'panel',peer_ip:metadata.peer_ip});json(res,200,{ok:true});return true;
+        }
+      }
+      if(path.startsWith('/api/general-admin/')){
+        if(actor.role!=='admin')throw fail(403,'forbidden','Acesso administrativo necessário.');
+        if(method==='GET'){
+          if(path.endsWith('/activity'))json(res,200,await activity.list(url.searchParams));
+          else if(incidentMatch)json(res,200,await history.detail(incidentMatch[1],url.searchParams));
+          else json(res,200,await history.list(url.searchParams));
+          return true;
+        }
+      }
+      throw fail(405,'method_not_allowed','Método não permitido.');
+    }catch(error){
+      const clientError=Number.isInteger(error.status)&&error.status>=400&&error.status<500;
+      if(error.retryAfter)res.setHeader('Retry-After',String(error.retryAfter));
+      json(res,clientError?error.status:500,{error:clientError?error.code:'internal_error',message:clientError?error.message:'Erro interno.'});return true;
+    }
+  };
+}

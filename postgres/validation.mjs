@@ -1,0 +1,6 @@
+export const fail=(status,code,message)=>Object.assign(new Error(message),{status,code});
+export function text(value,name,max,required=true){if(typeof value!=='string'||value.length>max||(required&&!value.trim()))throw fail(400,'invalid_field',`Campo ${name} inválido.`);return value;}
+export function password(value){text(value,'senha',256);if(value.length<12)throw fail(400,'invalid_password','Use uma senha com pelo menos 12 caracteres.');return value;}
+export function email(value){const v=text(value,'email',254).trim().toLowerCase();if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v))throw fail(400,'invalid_email','E-mail inválido.');return v;}
+export function keys(value,allowed){if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).some(k=>!allowed.includes(k)))throw fail(400,'invalid_field','Campo não reconhecido.');}
+export function webhookUrl(value){if(value==null)return '';text(value,'webhook_url',2048,false);const v=value.trim();if(!v)return '';let u;try{u=new URL(v);}catch{throw fail(400,'invalid_webhook_url','URL de webhook inválida.');}if(!['http:','https:'].includes(u.protocol))throw fail(400,'invalid_webhook_url','URL de webhook deve usar http ou https.');return v;}

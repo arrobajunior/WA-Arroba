@@ -112,3 +112,13 @@ Não foi feita atualização da biblioteca Baileys.
 - [ ] Portar alertas e transporte/fila/wa_keys, preservando ordenação e proprietário único da sessão.
 - [ ] Seleção explícita do backend, pausa/drenagem, teste completo em PostgreSQL real, backup e restauração.
 - [ ] Publicação/virada SOMENTE após aviso do Arroba; até lá continuar na branch preparacao/postgresql.
+
+## PostgreSQL — cadastro e controle preparados
+- [x] Login/sessões/usuários assíncronos, proteção Master e revogação de sessões.
+- [x] Cadastro/lista/detalhes/nome/webhook/token de instância com autoria e quota atômica.
+- [x] Listagem/dashboard com contagens e alertas em lote; identidade visual assíncrona.
+- [x] Roteador HTTP preparatório e 26 testes PostgreSQL locais; 64 testes SQLite preservados.
+- [ ] Próximo: alertas de 60s e transporte/fila/wa_keys com ordenação e proprietário único por sessão.
+- [ ] API de integração e rotas de mensagens/QR/conexão/lifecycle; composição de servidor completo.
+- [ ] Banco Railway real, HTTPS/TLS, pausa/drenagem, recuperação e capacidade 100+ continuam sem homologação.
+- [ ] Não publicar main/deploy nem importar dados reais antes de concluir as validações e receber o aviso de virada.
