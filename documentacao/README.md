@@ -67,3 +67,6 @@ Além da fundação, foram criados repositórios assíncronos de contas/instânc
 
 ## PostgreSQL — alertas e persistência de credenciais preparados
 Controlador assíncrono mantém tolerância de 60s, envio reivindicado/retentativas auditadas e envio ambíguo sem reenvio automático. Adaptador de credenciais mantém chaves criptografadas e gravações ordenadas. Configuração/teste de e-mail foram ligados ao roteador preparatório mediante injeção explícita. 43 testes PostgreSQL locais e 64 testes SQLite passaram. Transporte, fila de mensagens e composição do servidor ainda pendentes; nenhum deploy/migração real ocorreu. Retomar em POSTGRESQL.md.
+
+## PostgreSQL — transporte e fila preparados
+Implementados transporte Baileys assíncrono e fila com claim/ACK/unknown, propriedade exclusiva por banco/schema e persistência de sessão integrada. 66 testes PostgreSQL locais e 64 testes SQLite passaram. Só houve testes sintéticos; não foram conectados números reais nem alterada produção. Faltam API compatível, rotas de conexão/mensagens/lifecycle e composição do servidor/build/pausa. Guard novo não bloqueia o serviço SQLite antigo: parar sockets antigos é obrigatório na virada. Ler POSTGRESQL.md.

@@ -104,3 +104,11 @@ Usuário autorizou adiantar sem subir. Criados schema de transferência, snapsho
 - Criados serial-tasks e auth-state: credenciais Baileys criptografadas compatíveis, snapshots na chamada, lote atômico, filas por estado e invalidação que evita gravação antiga após reset.
 - Validação: 43 testes PostgreSQL locais e 64 testes atuais SQLite aprovados. Testes usam PGlite, dados sintéticos e SMTP simulado. Sem banco/credenciais/conversas reais ou deploy.
 - Próximo: transporte completo, coordenação de dono único e fila de mensagens, API de integração, rotas restantes e composição/pausa. RecoverInterrupted exige startup exclusivo; auth-state não habilita múltiplos donos. Ver POSTGRESQL.md.
+
+## 19/11/2026 — Transporte assíncrono e fila PostgreSQL
+- Criados transport.mjs, message-queue.mjs e transport-ownership.mjs dentro de postgres/, preservando arquivos operacionais da raiz.
+- Ligadas credenciais ordenadas, eventos de conexão/recebimento/ACK/webhooks, LID, mídias voláteis e lifecycle interno. Adicionadas reserva atômica/prioridade/expiração e recuperação sem repetir envios ambíguos.
+- Guard por banco/schema usa conexão dedicada, heartbeat e verificação no pg_locks; perda de propriedade fecha sockets. Índices de fila/provider/status adicionados ao schema de destino.
+- Corrigidas na adaptação: recuperação de uma instância não altera outra; reconexão preserva mídia ainda em memória; payload inválido não entra em loop; encerramento drena eventos já capturados.
+- Validação: 66 testes PostgreSQL locais e 64 testes SQLite aprovados. Sockets/serviços simulados e motor PGlite; sem conexão WhatsApp/SMTP/Railway real e sem deploy.
+- Próximo: API compatível, rotas de conexão/mensagens/lifecycle, composição do servidor/build e pausa. Guard não cobre o serviço SQLite antigo nem schema diferente; virada exige parar sessões antigas e validação real. Detalhes em POSTGRESQL.md.

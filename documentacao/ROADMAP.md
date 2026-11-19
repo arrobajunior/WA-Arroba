@@ -133,3 +133,14 @@ Não foi feita atualização da biblioteca Baileys.
 - [ ] API compatível e rotas de mensagens/QR/conexão/lifecycle, startup/shutdown e pausa/drenagem.
 - [ ] recoverInterrupted somente após adquirir propriedade exclusiva; nunca executá-lo em paralelo com SMTP ativo.
 - [ ] Ensaiar múltiplas conexões reais, Railway/TLS, restauração e carga; não fazer merge/deploy ou virada ainda.
+
+## PostgreSQL — transporte/fila preparados
+- [x] Transporte Baileys assíncrono com auth-state, lifecycle interno, QR, retry, LID, ACK, mídia e operações de cache.
+- [x] Fila com claim atômico, prioridade/expiração, recuperação segmentada, envio ambíguo sem reenvio e rechecagem de acesso.
+- [x] Propriedade exclusiva por banco/schema com conexão dedicada e fechamento em perda do lock.
+- [x] 66 testes PostgreSQL locais e 64 testes SQLite aprovados; serviços externos/sockets simulados.
+- [ ] Próximo: API compatível (token/envio/mídias/settings/chats/grupos/contatos) e rotas HTTP de mensagens/QR/conexão/lifecycle.
+- [ ] Compor servidor completo, readiness, startup/shutdown/pausa, build e ensaio ponta a ponta.
+- [ ] Na perda do guard, parar alerts e HTTP mutável; antes de liberar guard, drenar transporte/SMTP.
+- [ ] Parar serviço SQLite antigo antes de restaurar sessões PostgreSQL; guard não protege contra ele ou cópias em schemas diferentes.
+- [ ] Não fazer merge/deploy/virada ainda. Banco/TLS/WhatsApp reais, teste de carga e restauração continuam pendentes.

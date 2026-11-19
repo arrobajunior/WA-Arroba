@@ -223,6 +223,10 @@ CREATE TABLE "brand_assets" (
 
 CREATE INDEX messages_instance_created ON messages(instance_id,created_at);
 
+CREATE INDEX messages_instance_provider ON messages(instance_id,provider_id);
+CREATE INDEX messages_instance_status ON messages(instance_id,status);
+CREATE INDEX messages_pending_priority ON messages(instance_id,priority,created_at,id) WHERE status='queue';
+
 CREATE INDEX media_created ON media(created_at);
 
 CREATE UNIQUE INDEX connection_incident_open ON connection_incidents(instance_id) WHERE resolved_at IS NULL;
