@@ -9,10 +9,21 @@ import {createApp} from './server.mjs';
 import {openStore} from './store.mjs';
 const admin={email:'admin@example.com',password:'administrator-test-password'};
 const fakeTransport=()=>({state:()=>({status:'disconnected',qr:null}),connect:()=>{},disconnect:async()=>{},flush:()=>{},restore:()=>{},close:async()=>{}});
+test('quick natural reconnects do not email, flag dashboard, count as outages or spam the activity log',async t=>{
+ let clock=Date.now(),emit;const states=new Map(),sent=[];
+ const app=await fixture(t,{alertOptions:{now:()=>clock,mailReady:()=>true,sendEmail:async input=>{sent.push(input);return {}; }},transportFactory:(_store,options)=>{emit=(id,status,metadata={})=>{states.set(id,status);options.onConnectionState(id,status,'Natural reconnect',metadata);};return {...fakeTransport(),state:id=>({status:states.get(id)||'disconnected',qr:null})};}});
+ const cookie=await login(app),i=(await app.request('/api/instances',{method:'POST',cookie,data:{name:'Grace test'}})).body.instance;
+ await app.request('/api/general-admin',{method:'PATCH',cookie,data:{alert_email:'test@example.com'}});
+ emit(i.id,'authenticated',{source:'whatsapp',phone:'5511999999999'});
+ const initial=(await app.request('/api/instances/'+i.id+'/activity',{cookie})).body.total;
+ emit(i.id,'disconnected',{source:'whatsapp',code:500});clock+=3000;emit(i.id,'authenticated',{source:'whatsapp',phone:'5511999999999'});
+ assert.equal(sent.length,0);assert.equal((await app.request('/api/dashboard',{cookie})).body.counts.alerts,0);assert.equal((await app.request('/api/general-admin/incidents',{cookie})).body.total,0);assert.equal((await app.request('/api/instances/'+i.id+'/activity',{cookie})).body.total,initial);
+ emit(i.id,'disconnected',{source:'manual_disconnect'});await new Promise(resolve=>setTimeout(resolve,10));assert.equal(sent.length,1);assert.equal((await app.request('/api/dashboard',{cookie})).body.counts.alerts,1);
+});
 
 test('security audit records real actors, sensitive actions and failures, separates integrations and protects instance scope',async t=>{
  let emit,pendingContext;const states=new Map();
- const app=await fixture(t,{transportFactory:(store,options)=>{emit=(id,status,metadata={})=>{states.set(id,status);options.onConnectionState(id,status,'Test connection event',metadata);};return {...fakeTransport(),state:id=>({status:states.get(id)||'disconnected',qr:null}),connect:(id,attempt,context)=>{pendingContext=context;},disconnect:async(id,context)=>emit(id,'disconnected',{source:'manual_disconnect',auditContext:context})};}});
+ const app=await fixture(t,{alertOptions:{graceMs:0},transportFactory:(store,options)=>{emit=(id,status,metadata={})=>{states.set(id,status);options.onConnectionState(id,status,'Test connection event',metadata);};return {...fakeTransport(),state:id=>({status:states.get(id)||'disconnected',qr:null}),connect:(id,attempt,context)=>{pendingContext=context;},disconnect:async(id,context)=>emit(id,'disconnected',{source:'manual_disconnect',auditContext:context})};}});
  const root=await login(app);
  const account=async(name,role)=>{const credentials={email:name+'@example.com',password:name+'-long-test-password'};const user=(await app.request('/api/users',{method:'POST',cookie:root,data:{name,role,...credentials}})).body.user;return {user,cookie:await login(app,credentials)};};
  const owner=await account('owner','user'),second=await account('second-admin','admin'),other=await account('unrelated','user');
@@ -50,7 +61,7 @@ test('security audit records real actors, sensitive actions and failures, separa
 
 test('all admins share audited alert settings; USER and anonymous cannot access them; dashboard incidents stay scoped',async t=>{
  let change;const states=new Map(),sent=[];
- const app=await fixture(t,{alertOptions:{mailReady:()=>true,sendEmail:async input=>{sent.push(input);return {messageId:'test'};}},transportFactory:(_store,options)=>{change=(id,status)=>{states.set(id,status);options.onConnectionState(id,status,'Test connection event');};return {...fakeTransport(),state:id=>({status:states.get(id)||'disconnected',qr:null})};}});
+ const app=await fixture(t,{alertOptions:{graceMs:0,mailReady:()=>true,sendEmail:async input=>{sent.push(input);return {messageId:'test'};}},transportFactory:(_store,options)=>{change=(id,status)=>{states.set(id,status);options.onConnectionState(id,status,'Test connection event');};return {...fakeTransport(),state:id=>({status:states.get(id)||'disconnected',qr:null})};}});
  const root=await login(app);
  const create=async(name,role)=>{const credentials={email:name+'@example.com',password:name+'-test-password-long'};const made=await app.request('/api/users',{method:'POST',cookie:root,data:{name,role,...credentials}});assert.equal(made.status,201);return {cookie:await login(app,credentials),user:made.body.user};};
  const other=await create('admin2','admin'),alice=await create('alice','user'),bob=await create('bob','user');

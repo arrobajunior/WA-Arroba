@@ -118,6 +118,7 @@ export function createTransport(store, { socketFactory=makeWASocket, retryDelay=
         if(!valid())return;
         if(update.qr){e.qr=update.qr;e.status='qr';notify(id,'qr','A sessão precisa de uma nova leitura do QR Code.',{source:'whatsapp',reconnectAttempt:attempt,auditContext:e.auditContext});}
         if(update.connection==='open'){
+          clearTimeout(e.timer);e.timer=null;
           e.status='authenticated';e.qr=null;e.error=null;attempt=0;
           const phone=(e.socket.user?.id||'').split(':')[0].split('@')[0];
           db.prepare('UPDATE instances SET phone=?,updated_at=? WHERE id=?').run(phone,new Date().toISOString(),id);
@@ -128,7 +129,7 @@ export function createTransport(store, { socketFactory=makeWASocket, retryDelay=
           e.qr=null;
           if(e.status==='disconnecting')return;
           const reason=update.lastDisconnect?.error?.output?.statusCode;
-          notify(id,'disconnected',reason===DisconnectReason.loggedOut?'A sessão foi encerrada no WhatsApp. É necessário ler um novo QR Code.':reason===DisconnectReason.connectionReplaced?'A conexão foi substituída por outra sessão.':'Conexão com o WhatsApp interrompida. O sistema tentará reconectar quando possível.',{source:'whatsapp',code:reason,reconnectAttempt:attempt});
+          notify(id,'disconnected',reason===DisconnectReason.loggedOut?'A sessão foi encerrada no WhatsApp. É necessário ler um novo QR Code.':reason===DisconnectReason.connectionReplaced?'A conexão foi substituída por outra sessão.':'Conexão com o WhatsApp interrompida. O sistema tentará reconectar quando possível.',{source:'whatsapp',code:reason,reconnectAttempt:attempt,terminal:reason===DisconnectReason.loggedOut||reason===DisconnectReason.connectionReplaced||attempt>=5});
           if(reason===DisconnectReason.loggedOut){db.prepare('DELETE FROM wa_keys WHERE instance_id=?').run(id);db.prepare('UPDATE instances SET auto_connect=0 WHERE id=?').run(id);e.status='disconnected';e.error='Sessão encerrada no WhatsApp. Gere um novo QR Code.';return;}
           if(reason===DisconnectReason.connectionReplaced||attempt>=5){e.status='disconnected';e.error=reason===DisconnectReason.connectionReplaced?'Conexão substituída por outra sessão.':'Não foi possível reconectar. Tente conectar novamente.';db.prepare('UPDATE instances SET auto_connect=0 WHERE id=?').run(id);return;}
           e.status='retrying';

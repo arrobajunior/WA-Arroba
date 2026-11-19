@@ -57,3 +57,7 @@ Consultas aceitam page (padrão 1), limit (padrão 25, máximo 100), actor_id, a
 ## Verificação
 npm test: 52 testes aprovados. Cobrem autoria de admins e usuários, histórico restrito, filtros, integração separada, falhas/negações, antes/depois, troca real de número confirmada em socket simulado, correlação que não vaza para reconexões, ausência de segredos, paginação, migração única, triggers e preservação em reset/reinício.
 DOM local verificou aba, mostrar/renovar token, log central, filtros, paginação e regressão do histórico de quedas. WhatsApp/SMTP foram simulados. A homologação de ações no painel real é o próximo passo; esta mudança não desconectou nenhum canal real para teste.
+
+## Reconexões automáticas breves — atualização de 19/11/2026
+O controlador de alertas filtra as oscilações recuperáveis antes de chamar a auditoria de conexão. Interrupção que recupera em menos de 60s não gera par connection_lost/connection_established nem registros intermediários de retry. Uma interrupção confirmada após a tolerância e as situações terminais/explicitamente solicitadas continuam registradas.
+A recuperação breve ainda atualiza o último telefone confirmado; se o número realmente mudou, connection_number_changed é registrado mesmo com a confirmação rotineira suprimida. Contextos explícitos de pedidos humanos continuam auditáveis. Startup não repete queda de ocorrência que já estava aberta. Registros antigos já gravados não são apagados; a classificação transient afeta o histórico de quedas, não altera a tabela de auditoria apenas de acréscimo.

@@ -44,10 +44,10 @@ export async function createApp({dataDir=path.join(directory,'.data'),port=3210,
     }
   }catch(e){store.close();throw e;}
   const mediaBaseUrl=publicOrigin||`http://127.0.0.1:${port}`;
-  const alerts=createConnectionAlerts(store,{publicUrl:publicOrigin,appName:()=>branding.read().name,...alertOptions});
-  const incidentHistory=createIncidentHistory(db);
   const activity=createInstanceActivity(db);
-  const transport=transportFactory(store,{mediaBaseUrl,mediaRelay,legacyStorage:legacy,onConnectionState:(...args)=>{activity.connectionState(...args);alerts.stateChanged(...args);}}),attempts=new Map();
+  const alerts=createConnectionAlerts(store,{publicUrl:publicOrigin,appName:()=>branding.read().name,...alertOptions,onConnectionEvent:activity.connectionState});
+  const incidentHistory=createIncidentHistory(db);
+  const transport=transportFactory(store,{mediaBaseUrl,mediaRelay,legacyStorage:legacy,onConnectionState:alerts.stateChanged}),attempts=new Map();
   const dummyHash=await passwordHash(randomBytes(32).toString('hex'));
   const secure=publicOrigin?.startsWith('https:');
   const cookie=(token,maxAge)=>`wa_session=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${secure?'; Secure':''}`;

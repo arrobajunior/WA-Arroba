@@ -28,6 +28,9 @@ test('confirmed number changes retain the prior phone across logout and distingu
  activity.connectionState(instance.id,'authenticated',undefined,{phone:'5522222222222',source:'whatsapp',auditContext:context});
  const changed=activity.list(new URLSearchParams({action:'connection_number_changed'}),instance.id).events[0];assert.equal(changed.actor_id,actor.id);assert.deepEqual(changed.before,{phone:'5511111111111'});assert.deepEqual(changed.after,{phone:'5522222222222'});assert.equal(changed.request_id,context.request_id);
  activity.connectionState(instance.id,'disconnected','Network close',{source:'whatsapp',code:408});const lost=activity.list(new URLSearchParams({action:'connection_lost'}),instance.id).events[0];assert.equal(lost.actor_kind,'system');assert.equal(lost.actor_id,'');
+ const confirmations=activity.list(new URLSearchParams({action:'connection_established'}),instance.id).total;
+ activity.connectionState(instance.id,'authenticated',undefined,{phone:'5533333333333',source:'whatsapp',suppressConnectionEvent:true});
+ assert.equal(activity.list(new URLSearchParams({action:'connection_established'}),instance.id).total,confirmations);assert.equal(activity.list(new URLSearchParams({action:'connection_number_changed'}),instance.id).events[0].after.phone,'5533333333333');
 });
 test('historical creation and outages migrate once with unknown authors and survive later restarts',async t=>{
  const {store,dir}=await fixture(t),db=store.db;

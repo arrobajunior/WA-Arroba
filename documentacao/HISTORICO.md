@@ -60,3 +60,14 @@
 - Mantido messages_viewed ao consultar mensagens (incluindo acesso à aba, filtros e atualização manual), com autoria real.
 - Alterações, token, conexão e acessos negados continuam auditados. Registros antigos são preservados.
 - Teste de integração atualizado para verificar ausência de instance_viewed e presença de messages_viewed para o executor correto.
+
+## 19/11/2026 — Correção de alertas falsos por reconexão breve
+- Usuário reportou 27 e-mails/ocorrências, sendo várias recuperações de 2–4s e uma sessão encerrada intencionalmente. A causa no código era abertura/envio no primeiro evento close, antes da recuperação automática.
+- Implementada tolerância padrão de 60s em connection-alerts.mjs. Suspeitas ficam em connection_candidates, com prazo original persistido e snapshot seguro; tentativas não prolongam a espera.
+- Retorno breve cancela suspeita sem e-mail, ocorrência, vermelho no dashboard ou par de eventos de queda/reconexão na auditoria. Atualização de telefone e ações humanas permanecem auditadas.
+- Confirmada interrupção persistente: uma ocorrência e um e-mail por episódio; mantém horário original da detecção e linha do tempo de tentativas. Recuperação encerra a ocorrência. Se retornar antes de iniciar o envio, cancela e-mail pendente.
+- Logout explícito, códigos 401/440, tentativas esgotadas e QR exigido para sessão anteriormente conectada geram alerta imediato.
+- Migração aditiva classifica ocorrências antigas como transient apenas quando resolvidas em menos de 60s, fonte whatsapp e códigos recuperáveis conhecidos (408/428/500/503/515). Mantém datas/e-mails/provas e exclui-as do filtro padrão; não reclassifica logout intencional, 401/440 ou duração >=60s.
+- Acrescentado filtro Classificação: quedas confirmadas (padrão), reconexões breves anteriores e todos os registros. Resumos/padrões usam a classificação escolhida.
+- Cancelado timer antigo de tentativa quando o socket já recuperou, evitando reconexão forçada desnecessária. Verificação de uma ocorrência já aberta após reiniciar não gera novo evento de queda nem novo e-mail.
+- Validação: 61 testes na suíte aprovados, mais verificações focadas no limite exato de 60s e não repetição em verificação de startup; DOM local passou em filtros, detalhes, paginação, auditoria e histórico. SMTP e WhatsApp simulados; nenhum canal real foi desconectado para teste.

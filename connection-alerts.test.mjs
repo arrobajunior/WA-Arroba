@@ -9,6 +9,54 @@ import {alertMessage,sendAlertEmail} from './alert-email.mjs';
 import {createIncidentHistory} from './incident-history.mjs';
 
 const actor={id:'admin',name:'Test Admin',email:'admin@example.com'};
+test('production grace ignores 3s and 10s recoverable reconnects without incidents, email or audit loss events',async t=>{
+ const observed=[];const {store,alerts,sent,advance}=await fixture(t,{graceMs:undefined,onConnectionEvent:(...args)=>observed.push(args)});alerts.updateEmail(actor,'team@example.com');
+ alerts.stateChanged('aaaa1111','authenticated');
+ for(const [delay,code] of [[3000,428],[10000,500],[3000,503]]){
+  alerts.stateChanged('aaaa1111','disconnected','Recoverable close',{source:'whatsapp',code});await alerts.drain();assert.equal(sent.length,0);
+  assert.equal(store.db.prepare('SELECT count(*) AS n FROM connection_incidents').get().n,0);
+  advance(delay);alerts.stateChanged('aaaa1111','authenticated',undefined,{source:'whatsapp'});await alerts.drain();
+  assert.equal(store.db.prepare('SELECT count(*) AS n FROM connection_candidates').get().n,0);assert.equal(observed.at(-1)[3].suppressConnectionEvent,true);
+ }
+ assert.equal(sent.length,0);assert.equal(store.db.prepare('SELECT count(*) AS n FROM connection_incidents').get().n,0);assert.equal(observed.filter(e=>e[1]==='disconnected').length,0);
+});
+test('continuous outage confirms after 60s, preserves first detection and retries cannot extend the grace',async t=>{
+ const {store,alerts,sent,advance}=await fixture(t,{graceMs:undefined});alerts.updateEmail(actor,'team@example.com');alerts.stateChanged('aaaa1111','authenticated');
+ alerts.stateChanged('aaaa1111','disconnected','First close',{source:'whatsapp',code:428});const initial=store.db.prepare('SELECT * FROM connection_candidates').get();
+ advance(30000);alerts.stateChanged('aaaa1111','retrying','Retry',{source:'whatsapp',reconnectAttempt:1});assert.equal(store.db.prepare('SELECT due_at FROM connection_candidates').get().due_at,initial.due_at);
+ advance(29999);await alerts.drain();assert.equal(sent.length,0);advance(1);await alerts.drain();assert.equal(sent.length,1);
+ const incident=store.db.prepare('SELECT * FROM connection_incidents').get();assert.equal(incident.opened_at,initial.opened_at);assert.equal(incident.reconnect_attempts,1);assert.equal(incident.disconnect_code,428);
+ assert.ok(store.db.prepare("SELECT id FROM connection_incident_events WHERE kind='outage_confirmed'").get());
+ alerts.stateChanged('aaaa1111','disconnected','Still retrying',{source:'whatsapp',code:503});await alerts.drain();assert.equal(sent.length,1);
+ advance(5000);alerts.stateChanged('aaaa1111','authenticated');assert.ok(store.db.prepare('SELECT resolved_at FROM connection_incidents').get().resolved_at);
+});
+test('manual logout, ended session, replaced session, exhausted retries and required QR alert immediately',async t=>{
+ const observed=[];const {alerts,sent}=await fixture(t,{graceMs:undefined,onConnectionEvent:(...args)=>observed.push(args)});alerts.updateEmail(actor,'team@example.com');
+ for(const [status,metadata] of [['disconnected',{source:'manual_disconnect'}],['disconnected',{source:'whatsapp',code:401}],['disconnected',{source:'whatsapp',code:440}],['disconnected',{source:'whatsapp',terminal:true,code:503}],['qr',{source:'whatsapp'}]]){
+  alerts.stateChanged('aaaa1111','authenticated');const before=sent.length;alerts.stateChanged('aaaa1111',status,'Needs attention',metadata);await alerts.drain();assert.equal(sent.length,before+1);
+ }
+ const before=observed.length;alerts.reconcile(()=>({status:'disconnected'}));await alerts.drain();assert.equal(sent.length,5);assert.equal(observed.length,before);
+});
+test('a pending grace period survives recreation and does not send twice after confirmation',async t=>{
+ const {store,alerts,dir,advance}=await fixture(t,{graceMs:undefined});alerts.updateEmail(actor,'team@example.com');alerts.stateChanged('aaaa1111','authenticated');alerts.stateChanged('aaaa1111','disconnected','Close',{source:'whatsapp',code:500});advance(30000);await alerts.close();
+ const pending=store.db.prepare('SELECT * FROM connection_candidates').get(),reopened=openStore(dir),sent=[];let clock=pending.due_at-1;
+ const restarted=createConnectionAlerts(reopened,{now:()=>clock,mailReady:()=>true,sendEmail:async input=>{sent.push(input);return {};}});
+ try{await restarted.drain();assert.equal(sent.length,0);clock++;await restarted.drain();assert.equal(sent.length,1);await restarted.drain();assert.equal(sent.length,1);assert.equal(reopened.db.prepare('SELECT count(*) AS n FROM connection_candidates').get().n,0);}finally{await restarted.close();reopened.close();}
+});
+test('late recovery records sustained downtime but cancels email that has not started',async t=>{
+ const {store,alerts,sent,advance}=await fixture(t,{graceMs:undefined});alerts.updateEmail(actor,'team@example.com');alerts.stateChanged('aaaa1111','authenticated');alerts.stateChanged('aaaa1111','disconnected','Close',{source:'whatsapp',code:503});advance(61000);alerts.stateChanged('aaaa1111','authenticated');await alerts.drain();
+ const incident=store.db.prepare('SELECT * FROM connection_incidents').get();assert.ok(incident.resolved_at);assert.equal(incident.notification_status,'cancelled');assert.equal(sent.length,0);
+});
+test('grace timer confirms a sustained outage without requiring another socket event',async t=>{
+ const {alerts,sent}=await fixture(t,{graceMs:30,now:Date.now});alerts.updateEmail(actor,'team@example.com');alerts.stateChanged('aaaa1111','authenticated');alerts.stateChanged('aaaa1111','disconnected','Close',{source:'whatsapp',code:428});
+ const end=Date.now()+1000;while(!sent.length&&Date.now()<end)await new Promise(resolve=>setTimeout(resolve,5));assert.equal(sent.length,1);
+});
+test('migration separates old brief auto-reconnections without removing emails or intentional and sustained outages',async t=>{
+ const {store,dir}=await fixture(t),db=store.db;db.exec('ALTER TABLE connection_incidents DROP COLUMN outage_kind');
+ const insert=db.prepare('INSERT INTO connection_incidents(instance_id,opened_at,resolved_at,reason,source,disconnect_code,notification_status,email_sent_at) VALUES(?,?,?,?,?,?,?,?)');
+ for(const [id,seconds,source,code] of [['aaaa1111',3,'whatsapp',500],['aaaa1111',4,'manual_disconnect',null],['bbbb2222',3,'whatsapp',401],['bbbb2222',61,'whatsapp',428],['aaaa1111',60,'whatsapp',503]])insert.run(id,'2026-11-19T12:00:00.000Z',new Date(Date.parse('2026-11-19T12:00:00Z')+seconds*1000).toISOString(),'Old close',source,code,'sent','2026-11-19T12:00:00.100Z');
+ const reopened=openStore(dir);try{const history=createIncidentHistory(reopened.db);assert.equal(history.list().total,4);const brief=history.list(new URLSearchParams({kind:'transient'}));assert.equal(brief.total,1);assert.equal(brief.incidents[0].notification_status,'sent');assert.equal(brief.incidents[0].email_sent_at,'2026-11-19T12:00:00.100Z');assert.equal(history.list(new URLSearchParams({kind:'all'})).total,5);}finally{reopened.close();}
+});
 test('incident details capture identity at loss, technical metadata, duration and the email timeline without duplicating alerts',async t=>{
  const {store,alerts,sent,advance}=await fixture(t);alerts.updateEmail(actor,'team@example.com');
  store.db.prepare("UPDATE instances SET phone='5511999999999',name='Original name' WHERE id='aaaa1111'").run();
@@ -50,7 +98,7 @@ async function fixture(t,opts={}){
  store.db.prepare('INSERT INTO users(id,name,email,password_hash,role,created_at) VALUES(?,?,?,?,?,?)').run(actor.id,actor.name,actor.email,'unused','admin','now');
  for(const id of ['aaaa1111','bbbb2222'])store.db.prepare('INSERT INTO instances(id,name,token,created_at,updated_at,owner_id) VALUES(?,?,?,?,?,?)').run(id,'Sales '+id,store.encrypt('token'),'now','now',actor.id);
  let clock=Date.parse('2026-11-18T15:00:00Z');const sent=[];
- const alerts=createConnectionAlerts(store,{now:()=>clock,mailReady:()=>true,sendEmail:async input=>{sent.push(input);return {messageId:'smtp-'+sent.length};},...opts});
+ const alerts=createConnectionAlerts(store,{graceMs:0,now:()=>clock,mailReady:()=>true,sendEmail:async input=>{sent.push(input);return {messageId:'smtp-'+sent.length};},...opts});
  t.after(async()=>{await alerts.close();store.close();await rm(dir,{recursive:true,force:true});});
  return {store,alerts,sent,dir,advance:ms=>{clock+=ms;}};
 }

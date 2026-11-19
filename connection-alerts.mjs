@@ -1,13 +1,14 @@
 import {sendAlertEmail,smtpReady} from './alert-email.mjs';
 
 // Persisted incidents survive restarts. Retries never create a second incident.
-export function createConnectionAlerts(store,{sendEmail=sendAlertEmail,mailReady=smtpReady,publicUrl,appName=()=> 'WhatsApp API',now=Date.now,intervalMs=15000}={}) {
+export function createConnectionAlerts(store,{sendEmail=sendAlertEmail,mailReady=smtpReady,publicUrl,appName=()=> 'WhatsApp API',now=Date.now,intervalMs=15000,graceMs=60000,onConnectionEvent=()=>{}}={}) {
   const {db}=store;
-  let stopped=false,work=null,timer,rerun=false;
+  let stopped=false,work=null,timer,rerun=false,candidateTimer=null,stateReader=null,startupReadyAt=0;
+  if(!Number.isFinite(graceMs)||graceMs<0)throw new Error('Tempo de tolerância inválido.');
   const audit=(actor,action,before,after)=>db.prepare('INSERT INTO admin_audit(created_at,actor_id,actor_name,actor_email,action,before_value,after_value) VALUES(?,?,?,?,?,?,?)').run(new Date(now()).toISOString(),actor.id,actor.name,actor.email,action,JSON.stringify(before),JSON.stringify(after));
   const settings=()=>db.prepare('SELECT alert_email,updated_at,updated_by FROM general_settings WHERE id=1').get();
   const safeError=e=>/^[A-Z0-9_]{1,50}$/.test(e?.code||'')?e.code:'SMTP_ERROR';
-  const event=(id,kind,details={})=>{const time=new Date(now()).toISOString();db.prepare('INSERT INTO connection_incident_events(incident_id,created_at,kind,details) VALUES(?,?,?,?)').run(id,time,kind,JSON.stringify(details));db.prepare('UPDATE connection_incidents SET last_event_at=? WHERE id=?').run(time,id);};
+  const event=(id,kind,details={},at=null)=>{const time=at||new Date(now()).toISOString();db.prepare('INSERT INTO connection_incident_events(incident_id,created_at,kind,details) VALUES(?,?,?,?)').run(id,time,kind,JSON.stringify(details));db.prepare('UPDATE connection_incidents SET last_event_at=? WHERE id=?').run(time,id);};
   const context=metadata=>({source:['whatsapp','manual_disconnect','startup_reconcile','transport_start'].includes(metadata?.source)?metadata.source:'unknown',code:Number.isInteger(metadata?.code)?metadata.code:null,reconnect_attempt:Number.isInteger(metadata?.reconnectAttempt)&&metadata.reconnectAttempt>=0?metadata.reconnectAttempt:0});
   function updateEmail(actor,value){
     db.exec('BEGIN');try{
@@ -21,9 +22,10 @@ export function createConnectionAlerts(store,{sendEmail=sendAlertEmail,mailReady
     }catch(e){db.exec('ROLLBACK');throw e;}
     void drain();return settings();
   }
-  function stateChanged(id,status,reason='Conexão interrompida.',metadata={}){
+  function confirmedState(id,status,reason='Conexão interrompida.',metadata={},candidate=null){
     if(stopped)return;
-    const instance=db.prepare('SELECT i.*,u.name AS owner_name FROM instances i LEFT JOIN users u ON u.id=i.owner_id WHERE i.id=?').get(id);if(!instance)return;
+    let instance=db.prepare('SELECT i.*,u.name AS owner_name FROM instances i LEFT JOIN users u ON u.id=i.owner_id WHERE i.id=?').get(id);if(!instance)return;
+    if(candidate)instance={...instance,...JSON.parse(candidate.snapshot)};
     const time=new Date(now()).toISOString(),info=context(metadata);
     db.exec('BEGIN');try{
       let incident=db.prepare('SELECT * FROM connection_incidents WHERE instance_id=? AND resolved_at IS NULL').get(id);
@@ -38,19 +40,69 @@ export function createConnectionAlerts(store,{sendEmail=sendAlertEmail,mailReady
         if(!incident){
           const deployment=/^[a-f0-9-]{1,64}$/i.test(process.env.RAILWAY_DEPLOYMENT_ID||'')?process.env.RAILWAY_DEPLOYMENT_ID:'';
           const commit=/^[a-f0-9]{7,40}$/i.test(process.env.RAILWAY_GIT_COMMIT_SHA||'')?process.env.RAILWAY_GIT_COMMIT_SHA:'';
-          const inserted=db.prepare("INSERT INTO connection_incidents(instance_id,opened_at,reason,instance_name,instance_phone,owner_name,source,disconnect_code,last_connected_at,capture_version,deployment_id,app_commit) VALUES(?,?,?,?,?,?,?,?,?,'v2',?,?)").run(id,time,String(reason).slice(0,500),instance.name,instance.phone,instance.owner_name||'',info.source,info.code,instance.last_connected_at,deployment,commit);
+          const inserted=db.prepare("INSERT INTO connection_incidents(instance_id,opened_at,reason,instance_name,instance_phone,owner_name,source,disconnect_code,last_connected_at,capture_version,deployment_id,app_commit) VALUES(?,?,?,?,?,?,?,?,?,'v2',?,?)").run(id,candidate?.opened_at||time,String(reason).slice(0,500),instance.name,instance.phone,instance.owner_name||'',info.source,info.code,instance.last_connected_at,deployment,commit);
           incident={id:Number(inserted.lastInsertRowid)};
-          event(incident.id,'outage_opened',{status,reason:String(reason).slice(0,500),...info});
+          event(incident.id,'outage_opened',{status,reason:String(reason).slice(0,500),...info},candidate?.opened_at);
+          if(candidate){
+            for(const entry of JSON.parse(candidate.events))event(incident.id,'connection_update',entry.details,entry.at);
+            db.prepare('UPDATE connection_incidents SET reconnect_attempts=? WHERE id=?').run(candidate.reconnect_attempts,incident.id);
+            event(incident.id,'outage_confirmed',{grace_seconds:graceMs/1000,detected_at:candidate.opened_at});
+          }
         }else event(incident.id,'connection_update',{status,reason:String(reason).slice(0,500),...info});
         db.prepare('UPDATE connection_incidents SET disconnect_code=COALESCE(disconnect_code,?),reconnect_attempts=reconnect_attempts+? WHERE id=?').run(info.code,status==='retrying'?1:0,incident.id);
       }
       db.exec('COMMIT');
     }catch(e){db.exec('ROLLBACK');throw e;}
-    if(status!=='authenticated')void drain();
+  }
+  function clearCandidate(id){db.prepare('DELETE FROM connection_candidates WHERE instance_id=?').run(id);}
+  function armCandidateTimer(){
+    clearTimeout(candidateTimer);candidateTimer=null;if(stopped)return;
+    const next=db.prepare('SELECT min(due_at) AS due FROM connection_candidates').get()?.due;
+    if(next!==null&&next!==undefined){candidateTimer=setTimeout(()=>{void drain();},Math.max(1,Math.min(2147483647,Math.max(next,startupReadyAt)-now())));candidateTimer.unref();}
+  }
+  function promote(candidate){
+    confirmedState(candidate.instance_id,'disconnected',candidate.reason,JSON.parse(candidate.metadata),candidate);
+    clearCandidate(candidate.instance_id);
+    onConnectionEvent(candidate.instance_id,'disconnected',candidate.reason,{...JSON.parse(candidate.metadata),detected_at:candidate.opened_at,grace_seconds:graceMs/1000});
+  }
+  function promoteDue(){
+    if(now()<startupReadyAt)return;
+    for(const candidate of db.prepare('SELECT * FROM connection_candidates WHERE due_at<=? ORDER BY due_at').all(now())){
+      if(stateReader?.(candidate.instance_id)?.status==='authenticated'){clearCandidate(candidate.instance_id);continue;}
+      promote(candidate);
+    }
+  }
+  function stateChanged(id,status,reason='Conexão interrompida.',metadata={}){
+    if(stopped)return;
+    const instance=db.prepare('SELECT i.*,u.name AS owner_name FROM instances i LEFT JOIN users u ON u.id=i.owner_id WHERE i.id=?').get(id);if(!instance)return;
+    const candidate=db.prepare('SELECT * FROM connection_candidates WHERE instance_id=?').get(id);
+    let incident=db.prepare('SELECT id FROM connection_incidents WHERE instance_id=? AND resolved_at IS NULL').get(id);
+    if(status==='authenticated'){
+      if(candidate&&!incident&&now()>=candidate.due_at){promote(candidate);incident=db.prepare('SELECT id FROM connection_incidents WHERE instance_id=? AND resolved_at IS NULL').get(id);}
+      clearCandidate(id);confirmedState(id,status,reason,metadata);
+      const quiet=Boolean(candidate&&!incident&&!metadata.auditContext);
+      if(metadata.source!=='startup_reconcile'||candidate||incident)onConnectionEvent(id,status,reason,{...metadata,suppressConnectionEvent:quiet});
+    }else if(instance.first_connected_at&&['disconnected','retrying','qr'].includes(status)){
+      const terminal=metadata.source==='manual_disconnect'||metadata.terminal===true||[401,440].includes(metadata.code)||status==='qr';
+      if(incident||terminal||graceMs===0){
+        clearCandidate(id);confirmedState(id,status,reason,metadata,candidate);if(metadata.source!=='startup_reconcile'||!incident)onConnectionEvent(id,status,reason,metadata);void drain();
+      }else{
+        const info=context(metadata),at=new Date(now()).toISOString();
+        if(candidate){
+          const entries=JSON.parse(candidate.events);entries.push({at,details:{status,reason:String(reason).slice(0,500),...info}});
+          db.prepare('UPDATE connection_candidates SET events=?,reconnect_attempts=reconnect_attempts+? WHERE instance_id=?').run(JSON.stringify(entries.slice(-100)),status==='retrying'?1:0,id);
+        }else{
+          const snapshot={name:instance.name,phone:instance.phone,owner_name:instance.owner_name||'',last_connected_at:instance.last_connected_at};
+          db.prepare('INSERT INTO connection_candidates(instance_id,opened_at,due_at,reason,metadata,snapshot,reconnect_attempts) VALUES(?,?,?,?,?,?,?)').run(id,at,now()+graceMs,String(reason).slice(0,500),JSON.stringify(info),JSON.stringify(snapshot),status==='retrying'?1:0);
+        }
+      }
+    }else if(metadata.auditContext)onConnectionEvent(id,status,reason,metadata);
+    armCandidateTimer();
   }
   function drain(){
     if(stopped)return Promise.resolve();if(work){rerun=true;return work;}
     work=(async()=>{
+      promoteDue();
       const pending=db.prepare("SELECT * FROM connection_incidents WHERE resolved_at IS NULL AND notification_status IN ('pending','error','blocked') AND next_attempt_at<=? ORDER BY id LIMIT 20").all(now());
       for(const incident of pending){
         if(stopped)break;
@@ -75,7 +127,7 @@ export function createConnectionAlerts(store,{sendEmail=sendAlertEmail,mailReady
           event(incident.id,'email_failed',{recipient:to,attempt:attempts,code:safeError(e),will_retry:attempts<5});
         }
       }
-    })().catch(()=>console.error('[connection-alerts] Falha ao processar fila de alertas.')).finally(()=>{work=null;if(rerun&&!stopped){rerun=false;return drain();}});
+    })().catch(()=>console.error('[connection-alerts] Falha ao processar fila de alertas.')).finally(()=>{work=null;armCandidateTimer();if(rerun&&!stopped){rerun=false;return drain();}});
     return work;
   }
   // An interrupted SMTP send is ambiguous: keep it visible, never silently duplicate it.
@@ -91,7 +143,7 @@ export function createConnectionAlerts(store,{sendEmail=sendAlertEmail,mailReady
     catch(e){audit(actor,'alert_email_test_failed',{}, {recipient:to,code:safeError(e)});throw Object.assign(new Error('Não foi possível enviar o teste. Confira o SMTP e o histórico de alertas.'),{status:502,code:'email_test_failed'});}
   }
   function reconcile(state){for(const row of db.prepare('SELECT id FROM instances WHERE first_connected_at IS NOT NULL').all()){const status=state(row.id).status;if(status==='authenticated')stateChanged(row.id,status,'Conexão confirmada após iniciar o servidor.',{source:'startup_reconcile'});else stateChanged(row.id,'disconnected','A instância não restabeleceu a conexão após iniciar o servidor.',{source:'startup_reconcile'});}}
-  function start(state){timer=setInterval(()=>{void drain();},intervalMs);timer.unref();if(state){const startup=setTimeout(()=>{if(!stopped){reconcile(state);void drain();}},60000);startup.unref();const interval=timer;timer={stop:()=>{clearInterval(interval);clearTimeout(startup);}};}}
-  async function close(){stopped=true;if(timer?.stop)timer.stop();else clearInterval(timer);await work;}
+  function start(state){stateReader=state;startupReadyAt=now()+60000;timer=setInterval(()=>{void drain();},intervalMs);timer.unref();if(state){const startup=setTimeout(()=>{if(!stopped){reconcile(state);void drain();}},60000);startup.unref();const interval=timer;timer={stop:()=>{clearInterval(interval);clearTimeout(startup);}};}armCandidateTimer();}
+  async function close(){stopped=true;clearTimeout(candidateTimer);if(timer?.stop)timer.stop();else clearInterval(timer);await work;}
   return {settings,updateEmail,stateChanged,drain,sendTest,reconcile,start,close,mailReady};
 }

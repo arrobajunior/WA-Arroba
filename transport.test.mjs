@@ -10,6 +10,10 @@ import {createTransport} from './transport.mjs';
 import {createInstanceActivity} from './instance-activity.mjs';
 async function setup(t,extra={}){const dir=await mkdtemp(path.join(tmpdir(),'wa-transport-test-'));const store=openStore(dir),sockets=[];store.db.prepare('INSERT INTO users(id,name,email,password_hash,role,created_at) VALUES(?,?,?,?,?,?)').run('owner','Owner','owner@example.com','unused','user','now');store.db.prepare('INSERT INTO instances(id,name,token,created_at,updated_at) VALUES(?,?,?,?,?)').run('abcd1234','test',store.encrypt('token'),'now','now');store.db.prepare('UPDATE instances SET owner_id=?').run('owner');const transport=createTransport(store,{socketFactory:config=>{const s={ev:new EventEmitter(),user:{id:'5511999999999:1@s.whatsapp.net'},config,end(){},logout:async()=>{},sendMessage:async()=>({}),updateMediaMessage:async()=>{}};sockets.push(s);return s;},retryDelay:5,...extra});t.after(async()=>{await transport.close();store.close();await rm(dir,{recursive:true,force:true});});return {store,transport,sockets,dir};}
 const tick=()=>new Promise(r=>setTimeout(r,20));
+test('a recovered socket cancels a scheduled retry instead of forcing another connection',async t=>{
+ const {transport,sockets}=await setup(t,{retryDelay:40});transport.connect('abcd1234');const socket=sockets[0];socket.ev.emit('connection.update',{connection:'open'});socket.ev.emit('connection.update',{connection:'close',lastDisconnect:{error:{output:{statusCode:428}}}});socket.ev.emit('connection.update',{connection:'open'});
+ await new Promise(resolve=>setTimeout(resolve,70));assert.equal(sockets.length,1);assert.equal(transport.state('abcd1234').status,'authenticated');
+});
 test('connection audit context survives pairing retries and is cleared after confirmation',async t=>{
  const transitions=[],context={instance_id:'abcd1234',request_id:'request-test',actor:{id:'admin',kind:'user'}};
  const {transport,sockets}=await setup(t,{retryDelay:5,onConnectionState:(...args)=>transitions.push(args)});

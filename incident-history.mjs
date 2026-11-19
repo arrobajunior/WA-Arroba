@@ -11,7 +11,9 @@ function dayBoundary(value,extraDay=0){
 export function createIncidentHistory(db,{now=Date.now}={}){
   function list(params=new URLSearchParams()){
     const {page,limit}=pageValues(params),conditions=[],args=[];
-    const instance=params.get('instance_id')||'',status=params.get('status')||'all',emailStatus=params.get('email_status')||'all',from=params.get('from')||'',to=params.get('to')||'';
+    const instance=params.get('instance_id')||'',status=params.get('status')||'all',emailStatus=params.get('email_status')||'all',from=params.get('from')||'',to=params.get('to')||'',kind=params.get('kind')||'confirmed';
+    if(!['confirmed','transient','all'].includes(kind))throw fail('Classificação inválida.');
+    if(kind!=='all'){conditions.push('c.outage_kind=?');args.push(kind);}
     if(instance){if(!/^[a-f0-9]{8}$/.test(instance))throw fail('Instância inválida.');conditions.push('c.instance_id=?');args.push(instance);}
     if(!['all','open','resolved'].includes(status))throw fail('Situação de conexão inválida.');
     if(status!=='all')conditions.push(status==='open'?'c.resolved_at IS NULL':'c.resolved_at IS NOT NULL');

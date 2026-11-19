@@ -72,3 +72,13 @@ Não foi feita atualização da biblioteca Baileys.
 - [x] Simples visita à instância não gera novo log; não reintroduzir instance_viewed.
 - [x] Acesso à aba/consulta de Mensagens continua gerando messages_viewed.
 - [x] Manter auditoria de ações e preservar registros antigos.
+
+## Tolerância de reconexão — regra prioritária atual
+- [x] Recuperação automática em menos de 60s não gera e-mail/queda/vermelho nem par redundante na auditoria.
+- [x] Prazo persistido; retries não reiniciam a contagem; confirma queda persistente sem depender de novo evento de socket.
+- [x] Desconexão explícita, sessão encerrada/substituída, QR exigido e tentativas esgotadas continuam imediatos.
+- [x] Classificação conservadora de ocorrências breves anteriores, preservando histórico/e-mails e sessão intencionalmente desconectada.
+- [x] Filtro padrão de quedas confirmadas e opção para consultar reconexões breves anteriores.
+- [x] 61 testes aprovados; limites de tempo, persistência, auditoria e regressões de interface verificados.
+- [ ] Confirmar implantação e observar ocorrências reais futuras: a estação intencionalmente desconectada deve permanecer em alerta; reconexões de poucos segundos não devem disparar novos e-mails.
+- [ ] Não remover a tolerância nem voltar a enviar no primeiro close. Não apagar registros/e-mails antigos para esconder falsos positivos.

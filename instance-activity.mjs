@@ -31,13 +31,13 @@ export function createInstanceActivity(db,{now=Date.now}={}){
    const instance=db.prepare('SELECT * FROM instances WHERE id=?').get(id);if(!instance)return;
    const context=metadata.auditContext?.instance_id===id?metadata.auditContext:null;
    const actor=context?.actor||system,source=context?.source||(['whatsapp','startup_reconcile','transport_start','manual_disconnect'].includes(metadata.source)?metadata.source:'system');
-   const details={status,...(context?{attribution:'linked_to_connection_request'}:{}),...(reason?{reason:String(reason).slice(0,500)}:{}),...(Number.isInteger(metadata.code)?{code:metadata.code}:{}),...(Number.isInteger(metadata.reconnectAttempt)?{reconnect_attempt:metadata.reconnectAttempt}:{})};
+   const details={status,...(context?{attribution:'linked_to_connection_request'}:{}),...(reason?{reason:String(reason).slice(0,500)}:{}),...(Number.isInteger(metadata.code)?{code:metadata.code}:{}),...(Number.isInteger(metadata.reconnectAttempt)?{reconnect_attempt:metadata.reconnectAttempt}:{}),...(metadata.detected_at?{detected_at:metadata.detected_at,grace_seconds:metadata.grace_seconds}:{})};
    const action={authenticated:'connection_established',disconnected:'connection_lost',retrying:'connection_retry',qr:'connection_qr'}[status];if(!action)return;
    if(status==='authenticated'){
      const phone=typeof metadata.phone==='string'&&/^\d{6,20}$/.test(metadata.phone)?metadata.phone:(/^\d{6,20}$/.test(instance.phone)?instance.phone:'');
      const previous=instance.last_connected_phone||'';
      db.exec('BEGIN');try{
-       record({instance,actor,action,outcome:'observed',source,request_id:context?.request_id,after:phone?{phone}:{},details});
+       if(!metadata.suppressConnectionEvent||context)record({instance,actor,action,outcome:'observed',source,request_id:context?.request_id,after:phone?{phone}:{},details});
        if(phone&&previous&&phone!==previous)record({instance,actor,action:'connection_number_changed',outcome:'observed',source,request_id:context?.request_id,before:{phone:previous},after:{phone},details:{attribution:context?'linked_to_connection_request':'system_observation'}});
        if(phone)db.prepare('UPDATE instances SET last_connected_phone=? WHERE id=?').run(phone,id);
        db.exec('COMMIT');

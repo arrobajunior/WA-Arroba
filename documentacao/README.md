@@ -48,3 +48,7 @@ A implantação anterior do histórico de quedas (6c791cf) foi confirmada como S
 
 ### Ajuste de escopo solicitado em 18/11/2026
 A simples abertura/consulta dos dados da instância não gera mais log. A consulta da aba Mensagens continua auditada, assim como alterações, ações de token e conexão. Registros antigos de acesso já gravados são preservados.
+
+## Regra atual de reconexões — 19/11/2026
+Interrupções recuperáveis aguardam 60 segundos contínuos antes de gerar ocorrência, e-mail e alerta vermelho. Retorno antes desse tempo descarta a suspeita sem registrar par queda/reconexão na auditoria. Desconexão explícita, logout/401, sessão substituída/440, tentativas esgotadas ou QR exigido em instância já usada continuam imediatos. Mudanças de número e ações humanas continuam auditadas.
+connection_candidates persiste a espera; tentativas não reiniciam o prazo. O histórico padrão mostra quedas confirmadas. Reconexões breves anteriores identificáveis são preservadas como transient e consultáveis no filtro; e-mails já enviados não são apagados nem reenviados pela classificação. Leia ALERTAS.md antes de alterar esta regra.

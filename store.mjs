@@ -68,6 +68,13 @@ export function openStore(directory) {
     CREATE TABLE IF NOT EXISTS connection_incident_events(id INTEGER PRIMARY KEY AUTOINCREMENT,incident_id INTEGER NOT NULL REFERENCES connection_incidents(id),created_at TEXT NOT NULL,kind TEXT NOT NULL,details TEXT NOT NULL DEFAULT '{}');
     CREATE INDEX IF NOT EXISTS connection_incident_event_order ON connection_incident_events(incident_id,id);`);
   if(!columns('instances').includes('last_connected_phone')){db.exec("ALTER TABLE instances ADD COLUMN last_connected_phone TEXT NOT NULL DEFAULT ''");db.exec("UPDATE instances SET last_connected_phone=phone WHERE phone<>''");}
+  db.exec(`CREATE TABLE IF NOT EXISTS connection_candidates(instance_id TEXT PRIMARY KEY REFERENCES instances(id),opened_at TEXT NOT NULL,due_at INTEGER NOT NULL,reason TEXT NOT NULL,metadata TEXT NOT NULL,snapshot TEXT NOT NULL,events TEXT NOT NULL DEFAULT '[]',reconnect_attempts INTEGER NOT NULL DEFAULT 0);
+    CREATE INDEX IF NOT EXISTS connection_candidates_due ON connection_candidates(due_at);`);
+  if(!columns('connection_incidents').includes('outage_kind')){
+    db.exec("ALTER TABLE connection_incidents ADD COLUMN outage_kind TEXT NOT NULL DEFAULT 'confirmed'");
+    // Preserve old notifications and timestamps, but stop counting proven brief auto-reconnections as outages.
+    db.exec("UPDATE connection_incidents SET outage_kind='transient' WHERE resolved_at IS NOT NULL AND source='whatsapp' AND disconnect_code IN (408,428,500,503,515) AND julianday(resolved_at)>=julianday(opened_at) AND ROUND((julianday(resolved_at)-julianday(opened_at))*86400000)<60000");
+  }
   db.exec('CREATE TABLE IF NOT EXISTS schema_migrations(name TEXT PRIMARY KEY)');
   const hasActivity=Boolean(db.prepare("SELECT name FROM schema_migrations WHERE name='instance_activity_v1'").get());
   db.exec(`CREATE TABLE IF NOT EXISTS instance_activity(id INTEGER PRIMARY KEY AUTOINCREMENT,created_at TEXT NOT NULL,instance_id TEXT,instance_name TEXT NOT NULL DEFAULT '',actor_id TEXT NOT NULL DEFAULT '',actor_name TEXT NOT NULL,actor_email TEXT NOT NULL DEFAULT '',actor_role TEXT NOT NULL DEFAULT '',actor_kind TEXT NOT NULL,action TEXT NOT NULL,outcome TEXT NOT NULL,source TEXT NOT NULL,request_id TEXT NOT NULL DEFAULT '',before_value TEXT NOT NULL DEFAULT '{}',after_value TEXT NOT NULL DEFAULT '{}',details TEXT NOT NULL DEFAULT '{}',peer_ip TEXT NOT NULL DEFAULT '',legacy_key TEXT UNIQUE);
