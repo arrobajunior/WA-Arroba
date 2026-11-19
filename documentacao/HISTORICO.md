@@ -82,3 +82,11 @@
 
 ## 19/11/2026 — Preparação isolada de PostgreSQL
 Usuário autorizou adiantar sem subir. Criados schema de transferência, snapshot SQLite somente leitura com chave original, importador transacional com verificação completa e 6 testes em PostgreSQL embarcado. Suíte operacional de 64 testes preservada. Nenhum dado real transferido, segredo lido ou deploy solicitado. A aplicação ainda depende de SQLite: portabilidade assíncrona, pausa/drenagem e ensaio no banco real continuam obrigatórios. Ver POSTGRESQL.md para retomar.
+
+## 19/11/2026 — Início da adaptação assíncrona para PostgreSQL
+- Criados postgres/database.mjs, persistence-crypto.mjs e store.mjs: pool limitado, transações em conexão única, erros redigidos, preservação da chave e validação de schema/usuário restrito.
+- Portados repositórios de auditoria e histórico de quedas para queries PostgreSQL assíncronas, com escopo de filtros, atribuição, troca de número atômica e horários Brasília.
+- Corrigido trigger PostgreSQL para permitir exclusão de usuário comum, preservando o Master.
+- Validação: 17 testes PostgreSQL locais (PGlite e pool simulado) e 64 testes operacionais SQLite aprovados. Sem teste TCP/TLS do serviço real, sessões reais ou capacidade 100+.
+- Mantidos server.mjs, store.mjs e demais módulos operacionais atuais sem alteração. Backend PostgreSQL ainda não selecionável pelo servidor; não houve migração ou deploy.
+- Próximo: portar autenticação, cadastro/rotas, branding, alertas e transporte/fila/credenciais, concluir regressões e pausa/drenagem. Ver POSTGRESQL.md. Branch isolada; main permanece ccc85f1.

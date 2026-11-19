@@ -58,3 +58,6 @@ Leia [INSTANCIAS.md](INSTANCIAS.md). Nome editável no topo de Gerenciar; desati
 
 ## Preparação PostgreSQL — branch separada, 19/11/2026
 Leia [POSTGRESQL.md](POSTGRESQL.md). Transferência e testes adiantados a pedido do Arroba; produção permanece no SQLite. Backend assíncrono PostgreSQL ainda pendente: esta branch NÃO está pronta para virada. Não fazer merge/deploy sem novo aviso e sem concluir os bloqueios documentados.
+
+## PostgreSQL — adaptação iniciada, sem deploy
+Implementados cliente assíncrono/pool/transações, carregamento seguro da chave existente, validação do store e repositórios de auditoria e histórico de quedas. 17 testes PostgreSQL locais passaram e 64 testes atuais continuam passando. Os novos módulos ainda não estão ligados ao servidor: produção segue SQLite. Leia POSTGRESQL.md e continue por autenticação/cadastro/rotas, depois transporte/fila/alertas. Não fazer merge/deploy antes do aviso do Arroba e dos ensaios completos.

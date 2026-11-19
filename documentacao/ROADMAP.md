@@ -102,3 +102,13 @@ Não foi feita atualização da biblioteca Baileys.
 - [ ] Aguardar aviso do Arroba antes de publicar main ou executar qualquer virada.
 - [ ] Segurança de conversas (MFA/permissão própria/criptografia/retenção) e capacidade de 100+ sessões: ainda não implementadas nem homologadas.
 - [ ] Seguir o roteiro e os bloqueios de POSTGRESQL.md; variáveis sozinhas não mudam o backend.
+
+## Adaptação PostgreSQL — segunda etapa iniciada
+- [x] Cliente assíncrono, pool limitado, transação por conexão, erros sem conteúdo/URL, limites de tempo e inteiros seguros.
+- [x] Leitura da chave original sem regeneração e store com validação de privilégio/schema/triggers/credenciais.
+- [x] Auditoria e histórico de quedas portados para repositórios PostgreSQL assíncronos.
+- [x] 17 testes PostgreSQL locais e 64 testes SQLite aprovados.
+- [ ] Próximo imediato: autenticação/usuários, instâncias, branding e rotas HTTP usando await.
+- [ ] Portar alertas e transporte/fila/wa_keys, preservando ordenação e proprietário único da sessão.
+- [ ] Seleção explícita do backend, pausa/drenagem, teste completo em PostgreSQL real, backup e restauração.
+- [ ] Publicação/virada SOMENTE após aviso do Arroba; até lá continuar na branch preparacao/postgresql.
