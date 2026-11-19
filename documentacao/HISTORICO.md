@@ -79,3 +79,6 @@
 - Monitoramento inativo não dispara alertas; queda aberta termina por desativação, separada de recuperação real.
 - 64 testes automatizados aprovados. Ver INSTANCIAS.md. Publicação/implantação e homologação real são etapas distintas; verificar commit e status Railway antes de afirmar implantação.
 - Implantação anterior da tolerância de 60s: SUCCESS (2c4d98d9-0f26-454f-a1bb-cb2ebb30ae0e, commit 7351d1b).
+
+## 19/11/2026 — Preparação isolada de PostgreSQL
+Usuário autorizou adiantar sem subir. Criados schema de transferência, snapshot SQLite somente leitura com chave original, importador transacional com verificação completa e 6 testes em PostgreSQL embarcado. Suíte operacional de 64 testes preservada. Nenhum dado real transferido, segredo lido ou deploy solicitado. A aplicação ainda depende de SQLite: portabilidade assíncrona, pausa/drenagem e ensaio no banco real continuam obrigatórios. Ver POSTGRESQL.md para retomar.

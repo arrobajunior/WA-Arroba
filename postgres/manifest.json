@@ -1,0 +1,794 @@
+[
+  {
+    "name": "users",
+    "columns": [
+      {
+        "name": "id",
+        "type": "TEXT",
+        "pk": 1
+      },
+      {
+        "name": "name",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "email",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "password_hash",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "role",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "created_at",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "active",
+        "type": "INTEGER",
+        "pk": 0
+      },
+      {
+        "name": "is_master",
+        "type": "INTEGER",
+        "pk": 0
+      }
+    ],
+    "identity": null
+  },
+  {
+    "name": "sessions",
+    "columns": [
+      {
+        "name": "id",
+        "type": "TEXT",
+        "pk": 1
+      },
+      {
+        "name": "user_id",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "expires_at",
+        "type": "INTEGER",
+        "pk": 0
+      }
+    ],
+    "identity": null
+  },
+  {
+    "name": "instances",
+    "columns": [
+      {
+        "name": "id",
+        "type": "TEXT",
+        "pk": 1
+      },
+      {
+        "name": "name",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "phone",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "token",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "settings",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "created_at",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "updated_at",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "owner_id",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "token_encrypted",
+        "type": "INTEGER",
+        "pk": 0
+      },
+      {
+        "name": "auto_connect",
+        "type": "INTEGER",
+        "pk": 0
+      },
+      {
+        "name": "webhook_url",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "active",
+        "type": "INTEGER",
+        "pk": 0
+      },
+      {
+        "name": "disabled_at",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "disabled_by",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "first_connected_at",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "last_connected_at",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "last_connected_phone",
+        "type": "TEXT",
+        "pk": 0
+      }
+    ],
+    "identity": null
+  },
+  {
+    "name": "messages",
+    "columns": [
+      {
+        "name": "id",
+        "type": "TEXT",
+        "pk": 1
+      },
+      {
+        "name": "instance_id",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "recipient",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "body",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "type",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "status",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "ack",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "created_at",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "provider_id",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "error",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "direction",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "priority",
+        "type": "INTEGER",
+        "pk": 0
+      },
+      {
+        "name": "reference_id",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "filename",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "media_id",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "sent_at",
+        "type": "INTEGER",
+        "pk": 0
+      },
+      {
+        "name": "queued_at",
+        "type": "INTEGER",
+        "pk": 0
+      },
+      {
+        "name": "payload",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "source_url",
+        "type": "TEXT",
+        "pk": 0
+      }
+    ],
+    "identity": null
+  },
+  {
+    "name": "wa_keys",
+    "columns": [
+      {
+        "name": "instance_id",
+        "type": "TEXT",
+        "pk": 1
+      },
+      {
+        "name": "kind",
+        "type": "TEXT",
+        "pk": 2
+      },
+      {
+        "name": "key_id",
+        "type": "TEXT",
+        "pk": 3
+      },
+      {
+        "name": "value",
+        "type": "TEXT",
+        "pk": 0
+      }
+    ],
+    "identity": null
+  },
+  {
+    "name": "media",
+    "columns": [
+      {
+        "name": "instance_id",
+        "type": "TEXT",
+        "pk": 1
+      },
+      {
+        "name": "message_id",
+        "type": "TEXT",
+        "pk": 2
+      },
+      {
+        "name": "mimetype",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "data",
+        "type": "BLOB",
+        "pk": 0
+      },
+      {
+        "name": "created_at",
+        "type": "TEXT",
+        "pk": 0
+      }
+    ],
+    "identity": null
+  },
+  {
+    "name": "general_settings",
+    "columns": [
+      {
+        "name": "id",
+        "type": "INTEGER",
+        "pk": 1
+      },
+      {
+        "name": "alert_email",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "updated_at",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "updated_by",
+        "type": "TEXT",
+        "pk": 0
+      }
+    ],
+    "identity": null
+  },
+  {
+    "name": "admin_audit",
+    "columns": [
+      {
+        "name": "id",
+        "type": "INTEGER",
+        "pk": 1
+      },
+      {
+        "name": "created_at",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "actor_id",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "actor_name",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "actor_email",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "action",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "before_value",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "after_value",
+        "type": "TEXT",
+        "pk": 0
+      }
+    ],
+    "identity": "id"
+  },
+  {
+    "name": "connection_incidents",
+    "columns": [
+      {
+        "name": "id",
+        "type": "INTEGER",
+        "pk": 1
+      },
+      {
+        "name": "instance_id",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "opened_at",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "reason",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "resolved_at",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "notification_status",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "attempts",
+        "type": "INTEGER",
+        "pk": 0
+      },
+      {
+        "name": "next_attempt_at",
+        "type": "INTEGER",
+        "pk": 0
+      },
+      {
+        "name": "recipient",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "message_id",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "last_error",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "instance_name",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "instance_phone",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "owner_name",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "source",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "disconnect_code",
+        "type": "INTEGER",
+        "pk": 0
+      },
+      {
+        "name": "last_event_at",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "reconnect_attempts",
+        "type": "INTEGER",
+        "pk": 0
+      },
+      {
+        "name": "last_connected_at",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "email_sent_at",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "capture_version",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "deployment_id",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "app_commit",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "outage_kind",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "resolution_reason",
+        "type": "TEXT",
+        "pk": 0
+      }
+    ],
+    "identity": "id"
+  },
+  {
+    "name": "connection_incident_events",
+    "columns": [
+      {
+        "name": "id",
+        "type": "INTEGER",
+        "pk": 1
+      },
+      {
+        "name": "incident_id",
+        "type": "INTEGER",
+        "pk": 0
+      },
+      {
+        "name": "created_at",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "kind",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "details",
+        "type": "TEXT",
+        "pk": 0
+      }
+    ],
+    "identity": "id"
+  },
+  {
+    "name": "connection_candidates",
+    "columns": [
+      {
+        "name": "instance_id",
+        "type": "TEXT",
+        "pk": 1
+      },
+      {
+        "name": "opened_at",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "due_at",
+        "type": "INTEGER",
+        "pk": 0
+      },
+      {
+        "name": "reason",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "metadata",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "snapshot",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "events",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "reconnect_attempts",
+        "type": "INTEGER",
+        "pk": 0
+      }
+    ],
+    "identity": null
+  },
+  {
+    "name": "schema_migrations",
+    "columns": [
+      {
+        "name": "name",
+        "type": "TEXT",
+        "pk": 1
+      }
+    ],
+    "identity": null
+  },
+  {
+    "name": "instance_activity",
+    "columns": [
+      {
+        "name": "id",
+        "type": "INTEGER",
+        "pk": 1
+      },
+      {
+        "name": "created_at",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "instance_id",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "instance_name",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "actor_id",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "actor_name",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "actor_email",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "actor_role",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "actor_kind",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "action",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "outcome",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "source",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "request_id",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "before_value",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "after_value",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "details",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "peer_ip",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "legacy_key",
+        "type": "TEXT",
+        "pk": 0
+      }
+    ],
+    "identity": "id"
+  },
+  {
+    "name": "media_objects",
+    "columns": [
+      {
+        "name": "instance_id",
+        "type": "TEXT",
+        "pk": 1
+      },
+      {
+        "name": "message_id",
+        "type": "TEXT",
+        "pk": 2
+      },
+      {
+        "name": "object_key",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "mimetype",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "size",
+        "type": "INTEGER",
+        "pk": 0
+      },
+      {
+        "name": "created_at",
+        "type": "TEXT",
+        "pk": 0
+      }
+    ],
+    "identity": null
+  },
+  {
+    "name": "api_messages",
+    "columns": [
+      {
+        "name": "api_id",
+        "type": "INTEGER",
+        "pk": 1
+      },
+      {
+        "name": "message_id",
+        "type": "TEXT",
+        "pk": 0
+      }
+    ],
+    "identity": "api_id"
+  },
+  {
+    "name": "branding",
+    "columns": [
+      {
+        "name": "id",
+        "type": "INTEGER",
+        "pk": 1
+      },
+      {
+        "name": "name",
+        "type": "TEXT",
+        "pk": 0
+      }
+    ],
+    "identity": null
+  },
+  {
+    "name": "brand_assets",
+    "columns": [
+      {
+        "name": "slot",
+        "type": "TEXT",
+        "pk": 1
+      },
+      {
+        "name": "data",
+        "type": "BLOB",
+        "pk": 0
+      },
+      {
+        "name": "revision",
+        "type": "TEXT",
+        "pk": 0
+      }
+    ],
+    "identity": null
+  }
+]

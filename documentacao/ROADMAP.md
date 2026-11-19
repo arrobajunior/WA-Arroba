@@ -91,3 +91,14 @@ Não foi feita atualização da biblioteca Baileys.
 - [x] 64 testes automatizados aprovados.
 - [ ] Conferir implantação deste recurso e homologar com instância de teste autorizada; reativar não conecta sozinho.
 - [ ] Registrar resultados operacionais futuros sem tokens nem dados pessoais.
+
+## PostgreSQL — prioridade atual, sem implantação autorizada
+- [x] Preparação em branch separada, sem main/deploy.
+- [x] Schema de 17 tabelas, importação transacional, backup consistente e verificação de todas as tabelas/chaves/IDs.
+- [x] 6 testes da transferência em motor PostgreSQL embarcado com dados sintéticos.
+- [ ] Portar acesso síncrono SQLite para PostgreSQL assíncrono, sem bloquear o event loop.
+- [ ] Suíte operacional completa no PostgreSQL, pausa/drenagem, fila e retomada sem duplicidade.
+- [ ] Validar banco privado Railway/usuário restrito, chave e backup/restauração reais.
+- [ ] Aguardar aviso do Arroba antes de publicar main ou executar qualquer virada.
+- [ ] Segurança de conversas (MFA/permissão própria/criptografia/retenção) e capacidade de 100+ sessões: ainda não implementadas nem homologadas.
+- [ ] Seguir o roteiro e os bloqueios de POSTGRESQL.md; variáveis sozinhas não mudam o backend.

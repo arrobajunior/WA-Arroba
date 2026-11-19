@@ -55,3 +55,6 @@ connection_candidates persiste a espera; tentativas não reiniciam o prazo. O hi
 
 ## Gerenciamento do cadastro — 19/11/2026
 Leia [INSTANCIAS.md](INSTANCIAS.md). Nome editável no topo de Gerenciar; desativação reversível com aba Desativadas, bloqueio de API/conexão/alertas e auditoria. Dados e histórico são preservados; reativar exige Conectar para retomar.
+
+## Preparação PostgreSQL — branch separada, 19/11/2026
+Leia [POSTGRESQL.md](POSTGRESQL.md). Transferência e testes adiantados a pedido do Arroba; produção permanece no SQLite. Backend assíncrono PostgreSQL ainda pendente: esta branch NÃO está pronta para virada. Não fazer merge/deploy sem novo aviso e sem concluir os bloqueios documentados.
