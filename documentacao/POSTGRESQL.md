@@ -19,7 +19,7 @@ Não houve acesso a conversas reais, leitura de segredos, conexão ao PostgreSQL
 
 ## Testes
 npm test: suíte operacional existente (64 testes).
-npm run test:postgres: 26 testes (6 de transferência + 11 da camada assíncrona/repositórios + 9 de controle/HTTP). Usam PostgreSQL embarcado PGlite com dados sintéticos; concorrência entre conexões também tem teste de isolamento com pool simulado. Cobrem backup/WAL, chaves, blobs, Unicode, IDs, rollback, privilégios, auditoria, horários e erros sem conteúdo sensível.
+npm run test:postgres: 43 testes (6 de transferência + 11 da camada assíncrona/repositórios + 10 de controle/HTTP + 10 de alertas + 6 de credenciais/ordenação). Usam PostgreSQL embarcado PGlite com dados sintéticos; concorrência entre conexões também tem teste de isolamento com pool simulado. Cobrem backup/WAL, chaves, blobs, Unicode, IDs, rollback, privilégios, auditoria, horários e erros sem conteúdo sensível.
 Não é uma validação da conexão TCP/TLS nem do PostgreSQL real provisionado. Não é teste de capacidade para 100 sessões nem homologação WhatsApp real.
 
 ## Comandos de ensaio — só com dados sintéticos/cópia autorizada
@@ -101,3 +101,29 @@ Nenhuma sessão WhatsApp foi aberta e nenhum e-mail/webhook real foi disparado.
 ### Próximo ponto concreto de retomada
 Portar alertas de 60s e transporte/fila/wa_keys para PostgreSQL assíncrono, garantindo ordenação dos eventos/credenciais e dono único da sessão. Depois compor o servidor HTTP completo com a API de integração e todas as rotas restantes; fazer ensaio ponta a ponta e de pausa/drenagem antes de selecionar backend ou preparar virada.
 Mantêm-se todos os bloqueios de implantação das seções anteriores. Não fazer merge em main nem executar importação final só porque as rotas de cadastro passaram.
+
+## Alertas e credenciais — 19/11/2026, quarta etapa
+Autorização mantida: preparar na branch preparacao/postgresql; não fazer merge/deploy, trocar backend, alterar variáveis nem importar dados reais.
+
+### Implementado
+- postgres/connection-alerts.mjs: controlador assíncrono PostgreSQL para suspeitas persistidas, prazo contínuo de 60s, confirmação por timer, quedas terminais imediatas, recuperação, desativação e rechecagem de startup. Usa fila por instância e lock de linha; callbacks de auditoria são aguardados depois do COMMIT para evitar transações aninhadas.
+- Reconexões de 3–10s não abrem ocorrência, não enviam e-mail e não adicionam par redundante de queda/reconexão. Retries não prolongam o prazo. Logout explícito/401/440/QR exigido/tentativas esgotadas continuam imediatos; instância nunca conectada não alerta.
+- Destinatário compartilhado exige ADMIN ativo, valida um único endereço e gera admin_audit. Falhas anteriores em quedas abertas podem ser recolocadas na fila após corrigir destinatário, preservando todos os eventos anteriores. Testes manuais reservam um intervalo global de 60s com lock antes de enviar SMTP.
+- Cada e-mail é reivindicado em transação antes do SMTP, com rechecagem de instância ativa/queda aberta/status/prazo. SMTP não mantém conexão/transação de banco aberta. Resultado e evento são persistidos juntos. A rotina de SMTP tem até 5 tentativas com backoff; uma falha ao persistir um sucesso NÃO entra na retentativa de SMTP.
+- O método recoverInterrupted() marca envios em sending como unknown de forma explícita. A composição futura DEVE chamá-lo só uma vez no startup, depois de adquirir propriedade exclusiva do serviço. Não chamá-lo enquanto outro processo está enviando e-mails. Ele não é acionado automaticamente pelo construtor nem pelo roteador.
+- Se o e-mail já começou quando há recuperação/desativação, pode terminar: histórico preserva envio e fechamento. Não há promessa de entrega exactly-once pelo SMTP nem confirmação de caixa de entrada. Estado sending/unknown exige conferência e não é reenviado automaticamente.
+- Ao desativar, suspeita é descartada e queda em aberto é encerrada por deactivated/monitoring_disabled, sem inventar recuperação. Filas de alertas não selecionam instâncias inativas.
+- postgres/serial-tasks.mjs: filas independentes por chave; erro em uma operação não impede as seguintes.
+- postgres/auth-state.mjs: adaptador assíncrono de credenciais Baileys, com mesmo formato BufferJSON/AES-GCM/wa_keys do legado, upsert explícito PostgreSQL e conversão de app-state-sync-key. Atualizações são fotografadas no momento da chamada e gravadas em ordem por estado de instância; lote de chaves é atômico. Não usa um pool/conexão permanente por instância.
+- invalidate() bloqueia novas gravações e aguarda/desfaz operações em andamento daquele estado, para impedir ressuscitar chaves depois de reset/desativação. O transporte futuro deve invalidar o estado antigo ANTES de apagar/reiniciar a sessão e fornecer valid() associado à geração/propriedade da sessão. O adaptador sozinho NÃO coordena dois processos donos da mesma instância.
+- postgres/control-api.mjs passou a aceitar alerts injetado e disponibilizar configuração e teste de e-mail geral, com autoria/CSRF/permissões e erro SMTP seguro. Sem alerts, essas duas rotas retornam false para composição futura; o roteador não cria controlador nem inicia SMTP sozinho.
+
+### Validação
+43 testes PostgreSQL locais aprovados e 64 testes SQLite existentes aprovados.
+Os novos testes cobrem limite exato de 60s e timer real reduzido, retomada de suspeita após recriar controlador, startup com socket restaurado, quedas terminais, desativação, retry SMTP, concorrência entre reivindicações/testes, falha no banco depois de enviar, e-mail compartilhado por HTTP e autoria real. O log genérico de falha durante o teste de persistência SMTP é provocado intencionalmente.
+Credenciais testadas com buffers/instâncias isoladas, persistência/recriação, alteração de objetos enquanto gravação espera, rollback de lote parcial, invalidação durante transação e recuperação após erro na fila. Tudo usa dados sintéticos/PGlite e SMTP simulado. Não houve envio de e-mail real, socket WhatsApp, conversa real, leitura de segredo Railway ou implantação.
+As fixtures usam conexões serializadas ao motor embarcado; apesar dos locks e testes com controladores concorrentes, ainda é obrigatório ensaiar com múltiplas conexões PostgreSQL reais.
+
+### Próximo passo concreto
+Portar o transporte completo (connect/disconnect/restore/retry/eventos/ACK/webhooks), ligando createPostgresAuthState, await de persistência e invalidação em troca/reset/suspensão. Implementar propriedade exclusiva das sessões e fila de mensagens com reivindicação atômica, rechecagem antes de enviar e estados ambíguos preservados.
+Depois portar API de integração e rotas restantes de mensagens/QR/conexão/lifecycle, compor servidor e startup/shutdown/pausa, e executar ensaios completos antes de selecionar backend. Os arquivos operacionais server.mjs/transport.mjs continuam inalterados; produção permanece SQLite.

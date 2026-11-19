@@ -64,3 +64,6 @@ Implementados cliente assíncrono/pool/transações, carregamento seguro da chav
 
 ## PostgreSQL — cadastro e autenticação preparados
 Além da fundação, foram criados repositórios assíncronos de contas/instâncias/branding e um roteador HTTP preparatório, testados localmente. Suíte PostgreSQL: 26 testes; suíte SQLite: 64 testes. O servidor de produção não usa esses módulos. Próximo: alertas, transporte/fila/credenciais e composição das rotas restantes. Ver POSTGRESQL.md; não publicar main nem migrar dados reais ainda.
+
+## PostgreSQL — alertas e persistência de credenciais preparados
+Controlador assíncrono mantém tolerância de 60s, envio reivindicado/retentativas auditadas e envio ambíguo sem reenvio automático. Adaptador de credenciais mantém chaves criptografadas e gravações ordenadas. Configuração/teste de e-mail foram ligados ao roteador preparatório mediante injeção explícita. 43 testes PostgreSQL locais e 64 testes SQLite passaram. Transporte, fila de mensagens e composição do servidor ainda pendentes; nenhum deploy/migração real ocorreu. Retomar em POSTGRESQL.md.

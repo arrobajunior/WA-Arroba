@@ -20,7 +20,7 @@ async function body(req,max=65536){
 
 // Preparatory router only: not imported by server.mjs and never starts a WhatsApp session.
 // A future HTTP server must explicitly call it; false means this route belongs to another module.
-export async function createPostgresControlApi({store,origin,state,now=Date.now,perOwnerLimit=50,onUserEnabled=async()=>{}}={}){
+export async function createPostgresControlApi({store,origin,state,alerts,now=Date.now,perOwnerLimit=50,onUserEnabled=async()=>{}}={}){
   let base;try{base=new URL(origin);}catch{throw new Error('INVALID_PUBLIC_ORIGIN');}
   if(!['http:','https:'].includes(base.protocol)||base.username||base.password||base.pathname!=='/'||base.search||base.hash)throw new Error('INVALID_PUBLIC_ORIGIN');
   const {db}=store,activity=createPostgresInstanceActivity(db,{now}),history=createPostgresIncidentHistory(db,{now}),branding=createPostgresBranding(db);
@@ -28,7 +28,7 @@ export async function createPostgresControlApi({store,origin,state,now=Date.now,
   const cookie=(token,maxAge)=>`wa_session=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${base.protocol==='https:'?'; Secure':''}`;
   return async function handle(req,res){
     const path=(req.url||'/').split('?')[0],userMatch=path.match(/^\/api\/users\/([a-f0-9]{24})$/),instanceMatch=path.match(/^\/api\/instances\/([a-f0-9]{8})(?:\/(token|activity|credential-access))?$/),incidentMatch=path.match(/^\/api\/general-admin\/incidents\/(\d+)$/),assetMatch=path.match(/^\/brand-assets\/(positive|negative|favicon)\.png$/);
-    const known=['/api/auth/login','/api/auth/me','/api/auth/logout','/api/users','/api/instances','/api/dashboard','/api/branding','/api/general-admin/activity','/api/general-admin/incidents'].includes(path)||userMatch||instanceMatch||incidentMatch||assetMatch;
+    const known=['/api/auth/login','/api/auth/me','/api/auth/logout','/api/users','/api/instances','/api/dashboard','/api/branding','/api/general-admin/activity','/api/general-admin/incidents'].includes(path)||(alerts&&['/api/general-admin','/api/general-admin/test-email'].includes(path))||userMatch||instanceMatch||incidentMatch||assetMatch;
     if(!known)return false;
     res.setHeader('Cache-Control','no-store');res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','no-referrer');
     try{
@@ -61,6 +61,21 @@ export async function createPostgresControlApi({store,origin,state,now=Date.now,
       if(path==='/api/branding'&&method==='PATCH'){
         if(!actor.is_master)throw fail(403,'forbidden','Somente o Admin Master pode alterar a identidade visual.');json(res,200,{branding:await branding.update(await body(req,4500000))});return true;
       }
+      if(alerts&&['/api/general-admin','/api/general-admin/test-email'].includes(path)){
+        if(actor.role!=='admin')throw fail(403,'forbidden','Acesso administrativo necessário.');
+        if(path==='/api/general-admin'&&method==='GET'){
+          const data=await db.transaction(async tx=>({settings:await alerts.settings(),smtp_ready:alerts.mailReady(),audit:await tx.all('SELECT * FROM admin_audit ORDER BY id DESC LIMIT 100'),incidents:await tx.all('SELECT c.*,c.instance_phone AS phone FROM connection_incidents c ORDER BY c.id DESC LIMIT 100')}),{readOnly:true,isolation:'REPEATABLE READ'});
+          json(res,200,data);return true;
+        }
+        if(path==='/api/general-admin'&&method==='PATCH'){
+          const input=await body(req);keys(input,['alert_email']);const before=await alerts.settings();
+          const settings=await activity.run({instance:null,actor:activity.userActor(actor),action:'alert_email_updated',before:{alert_email:before.alert_email},source:'panel',peer_ip:metadata.peer_ip},()=>alerts.updateEmail(actor,input.alert_email),value=>({alert_email:value.alert_email}));
+          json(res,200,{settings});return true;
+        }
+        if(path==='/api/general-admin/test-email'&&method==='POST'){
+          keys(await body(req),[]);await activity.run({instance:null,actor:activity.userActor(actor),action:'alert_email_test',source:'panel',peer_ip:metadata.peer_ip},()=>alerts.sendTest(actor));json(res,200,{ok:true});return true;
+        }
+      }
       if(path==='/api/instances'&&method==='POST'){json(res,201,{instance:await instances.create(actor,await body(req),metadata)});return true;}
       if(['/api/instances','/api/dashboard'].includes(path)&&method==='GET'){json(res,200,await instances.list(actor,{filter:url.searchParams.get('state')||'active',dashboard:path==='/api/dashboard'}));return true;}
       if(instanceMatch){
@@ -85,7 +100,7 @@ export async function createPostgresControlApi({store,origin,state,now=Date.now,
       }
       throw fail(405,'method_not_allowed','Método não permitido.');
     }catch(error){
-      const clientError=Number.isInteger(error.status)&&error.status>=400&&error.status<500;
+      const clientError=Number.isInteger(error.status)&&((error.status>=400&&error.status<500)||(error.status===502&&error.code==='email_test_failed'));
       if(error.retryAfter)res.setHeader('Retry-After',String(error.retryAfter));
       json(res,clientError?error.status:500,{error:clientError?error.code:'internal_error',message:clientError?error.message:'Erro interno.'});return true;
     }

@@ -97,3 +97,10 @@ Usuário autorizou adiantar sem subir. Criados schema de transferência, snapsho
 - Adicionados rechecagem de conta após scrypt, locks determinísticos, limite de criação por proprietário atômico e contagens/alertas de listagem em lote.
 - 26 testes PostgreSQL locais (incluindo 9 de controle/HTTP) e 64 testes SQLite aprovados; dados sintéticos e HTTP em loopback. Sem TCP/TLS do banco Railway nem sessão WhatsApp real.
 - Nenhuma alteração em main/deploy/variáveis/dados reais. Próximo: alertas e transporte/fila/wa_keys, composição de servidor e API de integração, ensaio completo/pausa antes da virada. Detalhes e limites em POSTGRESQL.md.
+
+## 19/11/2026 — Alertas e credenciais em PostgreSQL
+- Portado controlador de alertas: grace persistida/timer, terminais imediatos, recuperação/desativação, mail claim atômico, retry limitado e unknown explícito em envio interrompido. Persistência pós-SMTP não dispara novo SMTP ao falhar.
+- Configuração e teste de e-mail compartilhados/ADMIN/auditados adicionados ao roteador preparatório quando alerts é injetado.
+- Criados serial-tasks e auth-state: credenciais Baileys criptografadas compatíveis, snapshots na chamada, lote atômico, filas por estado e invalidação que evita gravação antiga após reset.
+- Validação: 43 testes PostgreSQL locais e 64 testes atuais SQLite aprovados. Testes usam PGlite, dados sintéticos e SMTP simulado. Sem banco/credenciais/conversas reais ou deploy.
+- Próximo: transporte completo, coordenação de dono único e fila de mensagens, API de integração, rotas restantes e composição/pausa. RecoverInterrupted exige startup exclusivo; auth-state não habilita múltiplos donos. Ver POSTGRESQL.md.

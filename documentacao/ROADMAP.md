@@ -122,3 +122,14 @@ Não foi feita atualização da biblioteca Baileys.
 - [ ] API de integração e rotas de mensagens/QR/conexão/lifecycle; composição de servidor completo.
 - [ ] Banco Railway real, HTTPS/TLS, pausa/drenagem, recuperação e capacidade 100+ continuam sem homologação.
 - [ ] Não publicar main/deploy nem importar dados reais antes de concluir as validações e receber o aviso de virada.
+
+## PostgreSQL — alertas e credenciais preparados
+- [x] Alertas assíncronos com tolerância contínua de 60s, persistência e retomada.
+- [x] Claim de e-mail, retry limitado, envio ambíguo sem duplicação automática e desativação sem recuperação falsa.
+- [x] Configuração/teste de e-mail geral via roteador preparatório, com autoria real e permissão ADMIN.
+- [x] Adapter Baileys/wa_keys criptografado, lote atômico, snapshots e invalidação de gravações obsoletas.
+- [x] 43 testes PostgreSQL locais e 64 testes SQLite aprovados.
+- [ ] Próximo: transporte completo e dono exclusivo da sessão; fila de mensagens/ACK/webhooks sem duplicidade.
+- [ ] API compatível e rotas de mensagens/QR/conexão/lifecycle, startup/shutdown e pausa/drenagem.
+- [ ] recoverInterrupted somente após adquirir propriedade exclusiva; nunca executá-lo em paralelo com SMTP ativo.
+- [ ] Ensaiar múltiplas conexões reais, Railway/TLS, restauração e carga; não fazer merge/deploy ou virada ainda.

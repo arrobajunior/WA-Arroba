@@ -14,8 +14,9 @@ import {createPostgresControlApi} from './control-api.mjs';
 import {createPostgresAccounts} from './accounts.mjs';
 import {createPostgresInstances} from './instances.mjs';
 import {createPostgresInstanceActivity} from './instance-activity.mjs';
+import {createPostgresConnectionAlerts} from './connection-alerts.mjs';
 
-async function fixture(t,{perOwnerLimit=50,secure=false}={}){
+async function fixture(t,{perOwnerLimit=50,secure=false,withAlerts=false}={}){
   const engine=new PGlite(),schema='wa_rehearsal_control';let clock=Date.parse('2026-11-19T18:00:00Z'),gate=Promise.resolve();
   await engine.exec('CREATE SCHEMA '+schema+';SET search_path TO '+schema+',pg_catalog');
   await engine.exec(await readFile(new URL('./schema.sql',import.meta.url),'utf8'));
@@ -26,11 +27,12 @@ async function fixture(t,{perOwnerLimit=50,secure=false}={}){
   const root={id:'a'.repeat(24),email:'root@example.test',password:'root-password-long'};
   await engine.query('INSERT INTO users(id,name,email,password_hash,role,created_at,is_master) VALUES($1,$2,$3,$4,$5,$6,1)',[root.id,'Master',root.email,await passwordHash(root.password),'admin',new Date(clock).toISOString()]);
   await engine.exec("INSERT INTO branding VALUES(1,'WhatsApp API');INSERT INTO general_settings(id) VALUES(1)");
-  let handler;const server=http.createServer(async(req,res)=>{try{if(!await handler(req,res)){res.writeHead(404);res.end();}}catch{res.writeHead(500);res.end();}});
-  t.after(async()=>{server.closeAllConnections();await new Promise(r=>server.close(r));await db.close();await engine.close();});
+  let handler,alerts;const sent=[];const server=http.createServer(async(req,res)=>{try{if(!await handler(req,res)){res.writeHead(404);res.end();}}catch{res.writeHead(500);res.end();}});
+  t.after(async()=>{server.closeAllConnections();await new Promise(r=>server.close(r));await alerts?.close();await db.close();await engine.close();});
   server.listen(0,'127.0.0.1');await once(server,'listening');
   const base='http://127.0.0.1:'+server.address().port,origin=secure?base.replace('http:','https:'):base;
-  handler=await createPostgresControlApi({store,origin,perOwnerLimit,now:()=>clock});
+  if(withAlerts)alerts=createPostgresConnectionAlerts(store,{now:()=>clock,mailReady:()=>true,sendEmail:async value=>{sent.push(value);return {messageId:'synthetic-test'};}});
+  handler=await createPostgresControlApi({store,origin,alerts,perOwnerLimit,now:()=>clock});
   async function request(route,{method='GET',cookie,body,headers={}}={}){
     // fetch normalizes Host in this runtime; use the HTTP client to exercise a forged raw header.
     if(headers.Host)return new Promise((resolve,reject)=>{
@@ -43,7 +45,7 @@ async function fixture(t,{perOwnerLimit=50,secure=false}={}){
   async function account(cookie,name,role='user'){
     const credentials={email:name+'@example.test',password:name+'-long-password'},r=await request('/api/users',{method:'POST',cookie,body:{name,...credentials,role}});assert.equal(r.status,201);return {...credentials,id:r.body.user.id,cookie:await login(credentials)};
   }
-  return {db,engine,store,root,request,login,account,queries,now:()=>clock,advance:ms=>clock+=ms};
+  return {db,engine,store,root,request,login,account,queries,alerts,sent,now:()=>clock,advance:ms=>clock+=ms};
 }
 test('HTTP login keeps hashed sessions, enforces CSRF/host, limits expiry and reveals no password hashes',async t=>{
   const app=await fixture(t,{secure:true});
@@ -139,4 +141,14 @@ test('duplicate concurrent emails, unexpected fields and SQL-shaped names are ha
   const name="O'Reilly'); DROP TABLE users; --",created=await app.request('/api/instances',{method:'POST',cookie:root,body:{name}});assert.equal(created.status,201);assert.equal(created.body.instance.name,name);
   assert.equal((await app.db.get('SELECT count(*) AS n FROM users')).n,2);
   const withoutCsrf=await app.request('/api/auth/logout',{method:'POST',cookie:root,body:{},headers:{'X-Requested-With':'wrong'}});assert.equal(withoutCsrf.status,403);
+});
+test('general-admin HTTP shares alert email across admins, protects USER and records real email-test actors',async t=>{
+  const app=await fixture(t,{withAlerts:true}),root=await app.login(),admin=await app.account(root,'admin2','admin'),user=await app.account(root,'alice');
+  assert.equal((await app.request('/api/general-admin',{cookie:user.cookie})).status,403);
+  assert.equal((await app.request('/api/general-admin',{method:'PATCH',cookie:root,body:{alert_email:'team@example.test'}})).status,200);
+  assert.equal((await app.request('/api/general-admin',{cookie:admin.cookie})).body.settings.alert_email,'team@example.test');
+  assert.equal((await app.request('/api/general-admin/test-email',{method:'POST',cookie:admin.cookie,body:{}})).status,200);assert.equal(app.sent.length,1);assert.equal(app.sent[0].test,true);
+  assert.equal((await app.request('/api/general-admin/test-email',{method:'POST',cookie:root,body:{}})).status,429);
+  const events=(await app.request('/api/general-admin/activity',{cookie:root})).body.events;assert.ok(events.some(e=>e.actor_id===admin.id&&e.action==='alert_email_test'&&e.outcome==='success'));
+  assert.equal((await app.request('/api/general-admin',{method:'PATCH',cookie:root,body:{alert_email:'bad@example.test\r\nBcc: other@example.test'}})).status,400);
 });
