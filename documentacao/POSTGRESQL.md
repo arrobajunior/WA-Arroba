@@ -19,7 +19,7 @@ Não houve acesso a conversas reais, leitura de segredos, conexão ao PostgreSQL
 
 ## Testes
 npm test: suíte operacional existente (64 testes).
-npm run test:postgres: 66 testes (6 de transferência + 11 da camada assíncrona/repositórios + 10 de controle/HTTP + 10 de alertas + 6 de credenciais/ordenação + 5 de fila + 4 de propriedade + 14 de transporte). Usam PostgreSQL embarcado PGlite com dados sintéticos; concorrência entre conexões também tem teste de isolamento com pool simulado. Cobrem backup/WAL, chaves, blobs, Unicode, IDs, rollback, privilégios, auditoria, horários e erros sem conteúdo sensível.
+npm run test:postgres: 77 testes (6 de transferência + 11 da camada assíncrona/repositórios + 10 de controle/HTTP + 10 de alertas + 6 de credenciais/ordenação + 5 de fila + 4 de propriedade + 14 de transporte + 8 da API compatível + 3 de lifecycle/painel). Usam PostgreSQL embarcado PGlite com dados sintéticos; concorrência entre conexões também tem teste de isolamento com pool simulado. Cobrem backup/WAL, chaves, blobs, Unicode, IDs, rollback, privilégios, auditoria, horários e erros sem conteúdo sensível.
 Não é uma validação da conexão TCP/TLS nem do PostgreSQL real provisionado. Não é teste de capacidade para 100 sessões nem homologação WhatsApp real.
 
 ## Comandos de ensaio — só com dados sintéticos/cópia autorizada
@@ -159,3 +159,23 @@ SQL do guard foi validado no catálogo do motor PGlite; exclusão entre conexõe
 
 ### Próximo passo concreto
 Adaptar a API compatível (token, envio/listagem/filas/settings/mídias/contatos/grupos/chats) e ligar rotas HTTP de mensagens, QR, connect/disconnect e lifecycle ao novo transporte. Depois compor o servidor completo, health/readiness, startup/shutdown e pausa/drenagem, atualizar build e rodar ponta a ponta. server.mjs e transport.mjs operacionais continuam inalterados; definir DATABASE_URL ainda não troca o backend e não autoriza deploy.
+
+
+## API e comandos do painel — 19/11/2026, sexta etapa
+Preparação na mesma branch isolada. Servidor operacional, npm start e Dockerfile continuam apontando ao SQLite; nenhum deploy, importação real ou variável de produção foi alterado.
+
+### Implementado
+- postgres/compatibility-api.mjs mantém endpoints de integração, token Bearer/body/query, formulários/JSON/multipart, IDs públicos numéricos e consulta por ID legado, filtros/paginação, settings, QR, contatos/chats/grupos e operações delegadas ao transporte assíncrono.
+- Envio aceita texto/link/contatos/localização/vcard e anexos temporários; mídia por URL permanece criptografada. Upload/reuso fica restrito à própria instância. Leitura BLOB legada continua disponível sem persistir anexos novos.
+- Após preparar mídia, a transação revalida token, instância ativa e proprietário ativo. Capacidade de fila, limpeza e reenvio usam trava transacional por instância; limpeza não remove mensagens em envio nem recebidas. Reenvio de unknown exige comando explícito, nunca automático.
+- Auditoria de sucesso das mutações de fila/settings fica na mesma transação que a mudança. Operações remotas são aguardadas e auditadas separadamente, sem transação SQL aberta durante a rede. Não se gravam token, corpo da conversa nem URL secreta do webhook na auditoria.
+- HTTP confirma entrada na fila sem aguardar entrega. Não existe idempotência automática de requisição: repetir um POST após perder a resposta pode criar outra mensagem; referenceId não é único. Integração deve confirmar situação antes de repetir.
+- postgres/control-api.mjs agora liga mensagens, QR, connect/disconnect e lifecycle ao transporte injetado. postgres/instances.mjs oferece desativação/reativação auditada, preservando token/chaves/histórico, interrompendo socket e cancelando suspeita de queda. Reativação exige Conectar explícito.
+- Visitas comuns continuam sem registro. Aba Mensagens registra messages_viewed com usuário real e mantém busca literal/paginação/autorização. postgres/panel-messages.mjs evita consulta por mensagem para mídias e preserva formatos do painel legado; sent_at do painel mantém o timestamp de criação legado, enquanto a integração usa sent_at efetivo.
+- postgres/http.mjs compartilha parsing de corpo/limite e resposta. api-fixture.mjs é somente fixture HTTP de testes, NÃO é servidor operacional.
+
+### Validação
+77 testes PostgreSQL locais aprovados e 64 testes SQLite aprovados. Os 11 novos testes exercitam HTTP real em loopback, autenticação e rotação, instância/proprietário bloqueado, desativação durante preparo de anexo, quota concorrente, filtros/IDs/ACK, upload/multipart/reuso, QR PNG/JSON, payloads e autoria dos comandos/acessos. Dados e credenciais sintéticos, PGlite serializado e WhatsApp/SMTP/webhooks simulados. Não comprova conexão TCP/TLS real, exclusão em múltiplas conexões nem capacidade de 100+ sessões.
+
+### Próximo passo concreto
+Compor servidor PostgreSQL completo: mídia temporária e estáticos, health/readiness, aquisição/perda de ownership, recuperação/restauração explícita, tratamento de falhas, startup/shutdown e pausa/drenagem HTTP/SMTP/transporte. Depois preparar entrada/build sem ativação automática, ensaiar ponta a ponta e validar PostgreSQL real/TLS/privilégios/backup/restauração/carga. Ainda não está pronto para virada. Parar o serviço SQLite antigo antes de restaurar sessões reais continua obrigatório.

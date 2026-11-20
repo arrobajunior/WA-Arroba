@@ -70,3 +70,6 @@ Controlador assíncrono mantém tolerância de 60s, envio reivindicado/retentati
 
 ## PostgreSQL — transporte e fila preparados
 Implementados transporte Baileys assíncrono e fila com claim/ACK/unknown, propriedade exclusiva por banco/schema e persistência de sessão integrada. 66 testes PostgreSQL locais e 64 testes SQLite passaram. Só houve testes sintéticos; não foram conectados números reais nem alterada produção. Faltam API compatível, rotas de conexão/mensagens/lifecycle e composição do servidor/build/pausa. Guard novo não bloqueia o serviço SQLite antigo: parar sockets antigos é obrigatório na virada. Ler POSTGRESQL.md.
+
+## PostgreSQL — API de integração e comandos do painel preparados
+API compatível e rotas de mensagens/QR/conexão/desativação agora usam os módulos assíncronos preparatórios. Mantidos IDs/tokens/contratos; permissões são revalidadas depois do preparo de mídia. Aba Mensagens registra autoria, visita comum não. 77 testes PostgreSQL locais e 64 SQLite aprovados, com serviços simulados. Próximo: composição do servidor completo, readiness/pausa/drenagem e build; depois ensaios reais. Produção continua SQLite e a virada não está autorizada. Retomar em POSTGRESQL.md, sexta etapa.

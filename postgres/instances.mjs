@@ -1,7 +1,7 @@
 import {randomBytes} from 'node:crypto';
 import {fail,text,keys,webhookUrl} from './validation.mjs';
 
-export function createPostgresInstances(store,{activity,state=()=>({status:'disconnected'}),now=Date.now,perOwnerLimit=50}={}){
+export function createPostgresInstances(store,{activity,state=()=>({status:'disconnected'}),now=Date.now,perOwnerLimit=50,onDeactivate=async()=>{}}={}){
   const {db,encrypt,decrypt}=store;
   if(!Number.isInteger(perOwnerLimit)||perOwnerLimit<1||perOwnerLimit>10000)throw fail(500,'invalid_instance_limit','Limite inválido.');
   const actorFor=async(tx,actor,lock=false)=>{
@@ -82,5 +82,16 @@ export function createPostgresInstances(store,{activity,state=()=>({status:'disc
   const rotate=(actor,id,input={},metadata)=>mutate(actor,id,'token_rotated',input,async(tx,row,value)=>{
     keys(value,[]);return tx.get('UPDATE instances SET token=$1,token_encrypted=1 WHERE id=$2 RETURNING *',[encrypt(randomBytes(32).toString('hex')),row.id]);
   },metadata);
-  return {create,get,list,patch,rotate,authorized,serialize};
+  async function lifecycle(actor,id,input,{peer_ip=''}={}){
+    const initial=await authorized(actor,id);keys(input,['active']);if(typeof input.active!=='boolean')throw fail(400,'invalid_field','Informe active como verdadeiro ou falso.');
+    const row=await activity.run({instance:initial.row,actor:activity.userActor(initial.user),action:input.active?'instance_reactivated':'instance_deactivated',before:{active:Boolean(initial.row.active)},source:'panel',peer_ip},async()=>{
+      const updated=await db.transaction(async tx=>{
+        const user=await actorFor(tx,actor,true),current=await tx.get('SELECT * FROM instances WHERE id=$1 FOR UPDATE',[id]);if(!current||!allowed(user,current))throw fail(404,'not_found','Instância não encontrada.');
+        if(Boolean(current.active)===input.active)return current;
+        return tx.get('UPDATE instances SET active=$1,auto_connect=0,disabled_at=$2,disabled_by=$3,updated_at=$4 WHERE id=$5 RETURNING *',[Number(input.active),input.active?null:new Date(now()).toISOString(),input.active?null:user.id,new Date(now()).toISOString(),id]);
+      });
+      if(!input.active)await onDeactivate(id);return updated;
+    },updated=>({active:Boolean(updated.active),disabled_at:updated.disabled_at}));return serialize(row,{secret:true});
+  }
+  return {create,get,list,patch,rotate,lifecycle,authorized,serialize};
 }

@@ -144,3 +144,12 @@ Não foi feita atualização da biblioteca Baileys.
 - [ ] Na perda do guard, parar alerts e HTTP mutável; antes de liberar guard, drenar transporte/SMTP.
 - [ ] Parar serviço SQLite antigo antes de restaurar sessões PostgreSQL; guard não protege contra ele ou cópias em schemas diferentes.
 - [ ] Não fazer merge/deploy/virada ainda. Banco/TLS/WhatsApp reais, teste de carga e restauração continuam pendentes.
+
+## PostgreSQL — API e lifecycle HTTP preparados
+- [x] API compatível assíncrona, tokens/IDs/filtros/settings, anexos e operações do transporte.
+- [x] Revalidação de acesso após mídia, quota/limpeza/reenvio e auditoria transacional.
+- [x] Rotas do painel de mensagens/QR/connect/disconnect/desativar/reativar; visita comum sem log, aba Mensagens auditada.
+- [x] 77 testes PostgreSQL locais e 64 SQLite aprovados com dados sintéticos.
+- [ ] Próximo: servidor completo, estáticos/mídia, readiness, ownership, recuperação, startup/shutdown e pausa/drenagem HTTP/SMTP/transporte.
+- [ ] Preparar entrada/build sem ativação automática e ensaiar composição ponta a ponta.
+- [ ] Validar PostgreSQL TCP/TLS/privilégios/backup/restauração, WhatsApp real e carga 100+ antes da virada autorizada. Não fazer merge/deploy ainda.

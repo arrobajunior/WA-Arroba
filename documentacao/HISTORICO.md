@@ -112,3 +112,9 @@ Usuário autorizou adiantar sem subir. Criados schema de transferência, snapsho
 - Corrigidas na adaptação: recuperação de uma instância não altera outra; reconexão preserva mídia ainda em memória; payload inválido não entra em loop; encerramento drena eventos já capturados.
 - Validação: 66 testes PostgreSQL locais e 64 testes SQLite aprovados. Sockets/serviços simulados e motor PGlite; sem conexão WhatsApp/SMTP/Railway real e sem deploy.
 - Próximo: API compatível, rotas de conexão/mensagens/lifecycle, composição do servidor/build e pausa. Guard não cobre o serviço SQLite antigo nem schema diferente; virada exige parar sessões antigas e validação real. Detalhes em POSTGRESQL.md.
+
+## 19/11/2026 — API compatível e lifecycle HTTP PostgreSQL
+- Criados compatibility-api, http e panel-messages; ligados comandos de conexão/QR/desativação/reativação e leitura auditada da aba Mensagens ao roteador preparatório.
+- Mantidos token, IDs públicos, formulários/anexos, filtros/settings e operações de integração. Rechecagem de acesso após mídia e trava transacional de quota/limpeza/reenvio; sucesso dessas mutações e auditoria são atômicos.
+- 77 testes PostgreSQL locais e 64 testes SQLite aprovados; dados sintéticos/PGlite e provedores simulados. Sem deploy, acesso a conversas reais ou mudança de variáveis.
+- Próximo: compor servidor, readiness/ownership/recuperação/pausa/drenagem/build, validar banco/WhatsApp/carga reais antes da virada. Detalhes e limites em POSTGRESQL.md.
