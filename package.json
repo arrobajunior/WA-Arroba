@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node server.mjs",
     "test": "node --test server.test.mjs transport.test.mjs media-storage.test.mjs media-relay.test.mjs connection-alerts.test.mjs instance-activity.test.mjs",
-    "test:postgres": "node --test postgres/*.test.mjs",
+    "test:postgres": "node --test --test-concurrency=2 postgres/*.test.mjs",
     "postgres:prepare": "node scripts/prepare-postgres.mjs"
   },
   "engines": {

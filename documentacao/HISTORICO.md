@@ -118,3 +118,9 @@ Usuário autorizou adiantar sem subir. Criados schema de transferência, snapsho
 - Mantidos token, IDs públicos, formulários/anexos, filtros/settings e operações de integração. Rechecagem de acesso após mídia e trava transacional de quota/limpeza/reenvio; sucesso dessas mutações e auditoria são atômicos.
 - 77 testes PostgreSQL locais e 64 testes SQLite aprovados; dados sintéticos/PGlite e provedores simulados. Sem deploy, acesso a conversas reais ou mudança de variáveis.
 - Próximo: compor servidor, readiness/ownership/recuperação/pausa/drenagem/build, validar banco/WhatsApp/carga reais antes da virada. Detalhes e limites em POSTGRESQL.md.
+
+## 23/11/2026 — Composição do servidor PostgreSQL
+- Criada fábrica explícita postgres/server.mjs sem efeitos ao importar; liga módulos preparados, painel/API/estáticos/relay e startup com ownership antes de recuperar/restaurar.
+- Readiness sem dados sensíveis; pausa terminal drena requisições, transporte e alertas; shutdown libera dono/banco somente após concluir. Perda de dono bloqueia admissão e fecha transporte/alertas.
+- 85 testes PostgreSQL e 64 SQLite aprovados localmente; oito novos testes HTTP/lifecycle/composição com PGlite e socket/owner sintéticos. Sem produção, segredos Railway ou conversas reais.
+- Próximo: entrada/build e supervisão de processo, ensaios reais e carga. Não houve deploy nem mudança de backend operacional. Ver POSTGRESQL.md.

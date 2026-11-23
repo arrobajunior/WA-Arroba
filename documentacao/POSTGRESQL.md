@@ -19,7 +19,7 @@ Não houve acesso a conversas reais, leitura de segredos, conexão ao PostgreSQL
 
 ## Testes
 npm test: suíte operacional existente (64 testes).
-npm run test:postgres: 77 testes (6 de transferência + 11 da camada assíncrona/repositórios + 10 de controle/HTTP + 10 de alertas + 6 de credenciais/ordenação + 5 de fila + 4 de propriedade + 14 de transporte + 8 da API compatível + 3 de lifecycle/painel). Usam PostgreSQL embarcado PGlite com dados sintéticos; concorrência entre conexões também tem teste de isolamento com pool simulado. Cobrem backup/WAL, chaves, blobs, Unicode, IDs, rollback, privilégios, auditoria, horários e erros sem conteúdo sensível.
+npm run test:postgres: 85 testes (6 de transferência + 11 da camada assíncrona/repositórios + 10 de controle/HTTP + 10 de alertas + 6 de credenciais/ordenação + 5 de fila + 4 de propriedade + 14 de transporte + 8 da API compatível + 3 de lifecycle/painel + 8 de composição do servidor). Usam PostgreSQL embarcado PGlite com dados sintéticos; concorrência entre conexões também tem teste de isolamento com pool simulado. Cobrem backup/WAL, chaves, blobs, Unicode, IDs, rollback, privilégios, auditoria, horários e erros sem conteúdo sensível.
 Não é uma validação da conexão TCP/TLS nem do PostgreSQL real provisionado. Não é teste de capacidade para 100 sessões nem homologação WhatsApp real.
 
 ## Comandos de ensaio — só com dados sintéticos/cópia autorizada
@@ -179,3 +179,21 @@ Preparação na mesma branch isolada. Servidor operacional, npm start e Dockerfi
 
 ### Próximo passo concreto
 Compor servidor PostgreSQL completo: mídia temporária e estáticos, health/readiness, aquisição/perda de ownership, recuperação/restauração explícita, tratamento de falhas, startup/shutdown e pausa/drenagem HTTP/SMTP/transporte. Depois preparar entrada/build sem ativação automática, ensaiar ponta a ponta e validar PostgreSQL real/TLS/privilégios/backup/restauração/carga. Ainda não está pronto para virada. Parar o serviço SQLite antigo antes de restaurar sessões reais continua obrigatório.
+
+
+## Composição do servidor — 23/11/2026, sétima etapa
+- Criado postgres/server.mjs com createPostgresApp explícito, sem executar ao importar. Liga store, ownership, alertas, transporte, API compatível, painel, estáticos e mídia temporária. Não cria schema/admin nem altera dados da origem SQLite. Requer PUBLIC_URL/origem explícita; configuração de store/ownership usa mesmo URL/schema/TLS.
+- Ordem: validar store/chave e privilégios; adquirir ownership e conferir no pool; recuperar transporte e notificações interrompidas; construir roteadores; restaurar conexões quando solicitado; iniciar monitoramento; conferir ownership antes de retornar servidor pronto. Erro de startup fecha recursos em ordem e não devolve servidor utilizável.
+- /api/health e /api/ready devolvem somente {ok}, com 503 ao pausar/perder dono. Readiness verifica ownership no banco; Host de infraestrutura é permitido exclusivamente para essas sondas. Não é uma prova de que todos os números estão autenticados ou que SMTP está entregando.
+- Host, caminhos codificados/traversal/symlinks, métodos e estáticos são validados; mantidos CSP/no-store/nosniff/referrer e proteção CSRF do painel. Mídia temporária exige chave aleatória, instância e dono ativos; nenhum token aparece na URL do relay.
+- server.pause() é uma pausa terminal dessa composição: recusa novas requisições comuns, aguarda handlers admitidos, encerra transporte sem logout e depois alertas, limpa mídia volátil. Mantém banco e ownership abertos até shutdown. Não existe resume HTTP ou endpoint público de pausa; para retomar é necessário novo processo/composição após shutdown.
+- server.shutdown() aguarda pause, fecha listener/conexões ociosas, leitura S3 legada, ownership e finalmente store. Chamadas repetidas não repetem limpeza. Se drenagem/fechamento falhar, não libera dono/banco às cegas. Não há timeout que force abandonar escritor; a manutenção deve abortar se não drenar.
+- Perda de ownership torna readiness falsa imediatamente, recusa novas operações e inicia fechamento de alertas/transporte. Handlers já admitidos podem concluir/retornar erro; operação remota já iniciada não pode ser desfeita. O guard continua protegendo operações sensíveis da fila. O supervisor futuro deve chamar shutdown e encerrar processo; esta fábrica não instala sinais nem faz process.exit.
+- Reativação de conta volta a acionar flush das instâncias informadas pelo repositório. Limite por proprietário é configurável na fábrica (padrão legado 50); preparar 100+ exige definir distribuição/limites e testar recursos, não apenas aumentar número.
+
+### Validação
+A suíte PostgreSQL passou a limitar dois arquivos de teste simultâneos, para reduzir o consumo dos motores PGlite embarcados. Uma execução irrestrita encerrou dois processos de teste sem diagnóstico de assertion; a aprovação abaixo corresponde à execução completa com concorrência limitada.
+85 testes PostgreSQL locais e 64 SQLite aprovados. Oito novos testes cobrem composição/ordem, HTTP estático/Host/CSRF/caminhos/readiness, pausa com requisição admitida e transporte retido, falha de recuperação, perda de dono no startup/runtime, mídia segregada/bloqueio e composição dos controladores reais com credenciais e socket sintéticos. PostgreSQL PGlite serializado e owner simulado; nenhum banco Railway, número, conversa ou e-mail real acessado.
+
+### Próximo passo concreto
+Preparar entrada executável e build específicos sem ativar por DATABASE_URL sozinho; adicionar supervisão de sinais/erro no listen e ensaio de processo completo. npm start, server.mjs e Dockerfile operacionais continuam inalterados e usando SQLite. Depois ensaiar destino PostgreSQL real com TLS/usuário restrito, backup/restore e carga, e planejar a janela de virada. Não fazer merge/main/deploy/importação final antes do aviso do Arroba. Não executar a fábrica contra credenciais reais enquanto serviço SQLite antigo possuir sockets.

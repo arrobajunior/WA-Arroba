@@ -73,3 +73,6 @@ Implementados transporte Baileys assíncrono e fila com claim/ACK/unknown, propr
 
 ## PostgreSQL — API de integração e comandos do painel preparados
 API compatível e rotas de mensagens/QR/conexão/desativação agora usam os módulos assíncronos preparatórios. Mantidos IDs/tokens/contratos; permissões são revalidadas depois do preparo de mídia. Aba Mensagens registra autoria, visita comum não. 77 testes PostgreSQL locais e 64 SQLite aprovados, com serviços simulados. Próximo: composição do servidor completo, readiness/pausa/drenagem e build; depois ensaios reais. Produção continua SQLite e a virada não está autorizada. Retomar em POSTGRESQL.md, sexta etapa.
+
+## PostgreSQL — servidor composto, ainda sem ativação
+Em 23/11/2026, criada fábrica explícita postgres/server.mjs: recuperação/restauração ordenada, API/painel/estáticos/mídia, readiness e pausa/encerramento com drenagem e propriedade exclusiva. 85 testes PostgreSQL locais e 64 SQLite aprovados; tudo sintético. npm start e build operacional permanecem SQLite. Próximo: entrada executável/build e supervisão de processo; depois ensaios reais. Ler POSTGRESQL.md, sétima etapa. Não fazer deploy/virada ainda.

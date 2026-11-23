@@ -153,3 +153,11 @@ Não foi feita atualização da biblioteca Baileys.
 - [ ] Próximo: servidor completo, estáticos/mídia, readiness, ownership, recuperação, startup/shutdown e pausa/drenagem HTTP/SMTP/transporte.
 - [ ] Preparar entrada/build sem ativação automática e ensaiar composição ponta a ponta.
 - [ ] Validar PostgreSQL TCP/TLS/privilégios/backup/restauração, WhatsApp real e carga 100+ antes da virada autorizada. Não fazer merge/deploy ainda.
+
+## PostgreSQL — composição concluída em preparação
+- [x] Fábrica de servidor com API/painel/estáticos/mídia e startup ordenado por ownership/recuperação/restauração.
+- [x] Readiness, pausa terminal com drenagem HTTP/transporte/alertas e shutdown ordenado; bloqueio imediato em perda de dono.
+- [x] 85 testes PostgreSQL locais e 64 SQLite aprovados; sem serviços reais.
+- [ ] Próximo: entrada executável/build específicos, supervisão de sinais/erro de listen e ensaio de processo, sem ativação por DATABASE_URL isolada.
+- [ ] Validar PostgreSQL real/TLS/privilégios/backup/restauração, limite/distribuição e carga 100+, WhatsApp/SMTP reais em janela autorizada.
+- [ ] Não fazer merge/main/deploy/importação final antes do aviso do Arroba. Serviço SQLite antigo deve parar sockets antes de restaurar sessões reais no PostgreSQL.
