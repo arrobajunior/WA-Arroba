@@ -124,3 +124,9 @@ Usuário autorizou adiantar sem subir. Criados schema de transferência, snapsho
 - Readiness sem dados sensíveis; pausa terminal drena requisições, transporte e alertas; shutdown libera dono/banco somente após concluir. Perda de dono bloqueia admissão e fecha transporte/alertas.
 - 85 testes PostgreSQL e 64 SQLite aprovados localmente; oito novos testes HTTP/lifecycle/composição com PGlite e socket/owner sintéticos. Sem produção, segredos Railway ou conversas reais.
 - Próximo: entrada/build e supervisão de processo, ensaios reais e carga. Não houve deploy nem mudança de backend operacional. Ver POSTGRESQL.md.
+
+## 24/11/2026 — Entrada executável e build PostgreSQL separados
+- Criados runtime.mjs e scripts/start-postgres.mjs, npm run start:postgres e Dockerfile.postgres. Ativação explícita, restauração opt-in, configuração/TLS e tratamento seguro de erro/sinal durante startup/listen.
+- Runtime encerra ao perder readiness; drena sem process.exit forçado. Dockerfile operacional, npm start e produção preservados.
+- 94 testes PostgreSQL e 64 SQLite aprovados, com nove testes de runtime/build/subprocesso. Docker indisponível: não houve build/executação de imagem nem conexão Railway/WhatsApp/SMTP real.
+- Próximo: construir imagem e validar PostgreSQL isolado real/TLS/privilégios/backup/restauração/concorrência/carga antes de planejar virada autorizada. Ver POSTGRESQL.md.

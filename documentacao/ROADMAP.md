@@ -161,3 +161,11 @@ Não foi feita atualização da biblioteca Baileys.
 - [ ] Próximo: entrada executável/build específicos, supervisão de sinais/erro de listen e ensaio de processo, sem ativação por DATABASE_URL isolada.
 - [ ] Validar PostgreSQL real/TLS/privilégios/backup/restauração, limite/distribuição e carga 100+, WhatsApp/SMTP reais em janela autorizada.
 - [ ] Não fazer merge/main/deploy/importação final antes do aviso do Arroba. Serviço SQLite antigo deve parar sockets antes de restaurar sessões reais no PostgreSQL.
+
+## PostgreSQL — entrada e build separados preparados
+- [x] start:postgres/runtime e Dockerfile.postgres com opt-in, config/TLS e restauração explícita.
+- [x] Supervisão de sinais durante startup/listen, erros TCP/readiness e shutdown sem encerrar escritor à força.
+- [x] 94 testes PostgreSQL e 64 SQLite locais aprovados; subprocesso TCP/SIGTERM e imports de build conferidos.
+- [ ] Construir e executar imagem Docker isolada; Docker indisponível neste ambiente, build ainda não homologado.
+- [ ] PostgreSQL real isolado: TLS/privilégios/importação autorizada/backup/restore/múltiplas conexões, depois carga 100+ e recursos.
+- [ ] Planejar janela/reversão e testes reais autorizados. Não fazer merge/main/deploy/migração final ou alterar variáveis de produção ainda.

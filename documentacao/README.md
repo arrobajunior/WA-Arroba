@@ -76,3 +76,6 @@ API compatível e rotas de mensagens/QR/conexão/desativação agora usam os mó
 
 ## PostgreSQL — servidor composto, ainda sem ativação
 Em 23/11/2026, criada fábrica explícita postgres/server.mjs: recuperação/restauração ordenada, API/painel/estáticos/mídia, readiness e pausa/encerramento com drenagem e propriedade exclusiva. 85 testes PostgreSQL locais e 64 SQLite aprovados; tudo sintético. npm start e build operacional permanecem SQLite. Próximo: entrada executável/build e supervisão de processo; depois ensaios reais. Ler POSTGRESQL.md, sétima etapa. Não fazer deploy/virada ainda.
+
+## PostgreSQL — entrada e build preparados
+24/11/2026: runtime/start:postgres e Dockerfile.postgres separados, com opt-in explícito, TLS/config validados e supervisão de sinais/listen/readiness. 94 testes PostgreSQL locais e 64 SQLite aprovados, incluindo subprocesso TCP/SIGTERM; imagem Docker ainda não construída por falta de Docker neste ambiente. npm start/Dockerfile operacional/main continuam SQLite. Retomar na oitava etapa de POSTGRESQL.md: construir imagem isolada e validar banco/TLS/privilégios/backup/carga reais, sem deploy antes do aviso do Arroba.

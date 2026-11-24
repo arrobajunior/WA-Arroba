@@ -19,7 +19,7 @@ Não houve acesso a conversas reais, leitura de segredos, conexão ao PostgreSQL
 
 ## Testes
 npm test: suíte operacional existente (64 testes).
-npm run test:postgres: 85 testes (6 de transferência + 11 da camada assíncrona/repositórios + 10 de controle/HTTP + 10 de alertas + 6 de credenciais/ordenação + 5 de fila + 4 de propriedade + 14 de transporte + 8 da API compatível + 3 de lifecycle/painel + 8 de composição do servidor). Usam PostgreSQL embarcado PGlite com dados sintéticos; concorrência entre conexões também tem teste de isolamento com pool simulado. Cobrem backup/WAL, chaves, blobs, Unicode, IDs, rollback, privilégios, auditoria, horários e erros sem conteúdo sensível.
+npm run test:postgres: 94 testes (6 de transferência + 11 da camada assíncrona/repositórios + 10 de controle/HTTP + 10 de alertas + 6 de credenciais/ordenação + 5 de fila + 4 de propriedade + 14 de transporte + 8 da API compatível + 3 de lifecycle/painel + 8 de composição do servidor + 9 de runtime/build). Usam PostgreSQL embarcado PGlite com dados sintéticos; concorrência entre conexões também tem teste de isolamento com pool simulado. Cobrem backup/WAL, chaves, blobs, Unicode, IDs, rollback, privilégios, auditoria, horários e erros sem conteúdo sensível.
 Não é uma validação da conexão TCP/TLS nem do PostgreSQL real provisionado. Não é teste de capacidade para 100 sessões nem homologação WhatsApp real.
 
 ## Comandos de ensaio — só com dados sintéticos/cópia autorizada
@@ -197,3 +197,37 @@ A suíte PostgreSQL passou a limitar dois arquivos de teste simultâneos, para r
 
 ### Próximo passo concreto
 Preparar entrada executável e build específicos sem ativar por DATABASE_URL sozinho; adicionar supervisão de sinais/erro no listen e ensaio de processo completo. npm start, server.mjs e Dockerfile operacionais continuam inalterados e usando SQLite. Depois ensaiar destino PostgreSQL real com TLS/usuário restrito, backup/restore e carga, e planejar a janela de virada. Não fazer merge/main/deploy/importação final antes do aviso do Arroba. Não executar a fábrica contra credenciais reais enquanto serviço SQLite antigo possuir sockets.
+
+
+## Entrada e build — 24/11/2026, oitava etapa
+Preparação somente na branch; main, Dockerfile operacional, npm start e Railway não foram alterados.
+
+### Implementado
+- postgres/runtime.mjs valida configuração e supervisiona createPostgresApp; scripts/start-postgres.mjs e npm run start:postgres são a entrada explícita. Importar runtime não abre banco nem inicia serviço.
+- PG_RUNTIME_ENABLED=true é obrigatório; DATABASE_URL isolada não ativa a entrada nova. PG_RESTORE_CONNECTIONS aceita somente true/false e tem padrão false. Não existe fallback silencioso para SQLite nem criação de chave/schema/admin.
+- Valida origem PUBLIC_URL, porta, schema permitido, pool 1–30, limite por proprietário e TLS com certificado verificado. PG_CA_FILE opcional carrega CA adicional; chave original via DATA_DIR/master.key ou PERSISTENCE_KEY_BASE64, com validação existente. Erros de partida/listen/CA usam mensagens genéricas, sem URL, senha, caminho ou payload nos logs.
+- SIGINT/SIGTERM registrados antes do startup: se chegar enquanto compõe, aguarda os recursos, fecha sem abrir listener; se chegar durante listen, aguarda sucesso/falha antes de drenar. Sinais repetidos não forçam process.exit ou abandonam gravações. Erro de bind/listen fecha recursos e define exitCode=1.
+- Após listen, erros do servidor e perda de readiness iniciam shutdown com exitCode=1. Monitor a cada 1s usa estado local; ownership mantém heartbeat/verificação PostgreSQL. Se limpeza falhar, sinaliza erro e não força liberar banco/dono; supervisor externo precisa tratar falha/hang e respeitar drenagem.
+- Dockerfile.postgres é separado e escolhe entrada PostgreSQL, usa usuário node, CA/ffmpeg e healthcheck existentes. Copia módulos de runtime/manifest/public explicitamente, sem fixtures de PGlite nem ferramenta de transferência. Instala dependências production com lockfile; imagem não contém chave, banco ou sessão.
+
+### Configuração futura (não aplicar em produção agora)
+| Variável | Finalidade |
+| --- | --- |
+| PG_RUNTIME_ENABLED | true para executar entrada PostgreSQL |
+| PUBLIC_URL | Origem pública sem caminho |
+| DATABASE_URL | Banco de destino, usuário runtime restrito; TLS verificado |
+| PG_SCHEMA | wa_app ou wa_rehearsal_* permitido; padrão wa_app |
+| DATA_DIR / PERSISTENCE_KEY_BASE64 | Chave original; nunca gerar outra na virada |
+| PG_CA_FILE | CA PEM para destino, se necessária |
+| PG_RESTORE_CONNECTIONS | true restaura sessões; padrão false |
+| PG_POOL_MAX | 1–30, padrão 10, mais conexão dedicada do owner |
+| PG_INSTANCE_LIMIT | 1–10000 por proprietário, padrão 50; não comprova capacidade |
+| HOST / PORT | Bind, padrões 127.0.0.1 e 3210; imagem usa 0.0.0.0 |
+
+A receita futura de imagem é docker build -f Dockerfile.postgres; a escolha no Railway só deve ocorrer na janela autorizada. Não usar esse comando como evidência de build realizado. Sem PG_RUNTIME_ENABLED, a imagem recusa startup. Mesmo com restauração false, esse runtime NÃO é modo somente leitura: recupera filas/notificações e aceita comandos manuais, podendo enviar e-mails. Ensaiar somente com dados sintéticos isolados e SMTP/socket simulados até autorização específica.
+
+### Validação
+94 testes PostgreSQL locais e 64 SQLite aprovados. Nove testes novos cobrem config, opt-in, TLS/limites, sinal antes/durante listen, falha de bind TCP real, readiness, executable em subprocesso sem opt-in, processo filho com listener real/SIGTERM/drenagem e fechamento natural, além da cobertura dos imports relativos na receita Docker. Banco/WhatsApp/SMTP continuam simulados. Não há Docker disponível neste ambiente: receita conferida, mas imagem NÃO foi construída/executada nem dependências npm ci de imagem homologadas.
+
+### Próximo passo concreto
+Construir/executar Dockerfile.postgres em ambiente com Docker e dados sintéticos; depois ensaiar PostgreSQL real isolado com TCP/TLS, usuário restrito, importação/cópia autorizada, backup/restauração e múltiplas conexões. Verificar limites/memória/CPU para 100+ instâncias e plano de janela/drenagem/reversão. Testar WhatsApp/SMTP reais somente quando autorizado. Não fazer merge/main/deploy/importação final nem mudar variáveis de produção. A virada exige parar os sockets antigos SQLite antes de restaurar sessões no novo processo.
