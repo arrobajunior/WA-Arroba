@@ -177,3 +177,7 @@ Não foi feita atualização da biblioteca Baileys.
 - [ ] Conferir aprovação real do workflow Actions do commit; corrigir qualquer falha antes de considerar imagem/TCP/TLS/restore homologados.
 - [ ] Carga100+ e validação do destino isolado autorizado; depois planejar janela/reversão e homologar WhatsApp/SMTP com autorização.
 - [ ] Não fazer merge/deploy/importação final ou mudar variáveis de produção ainda.
+
+## 24/11/2026 — Auditoria e preparação da virada autorizada
+Arroba autorizou avançar para produção, com objetivo de concluir em até uma hora. Ainda não ocorreu virada. Confirmados serviços WA-Arroba/WhatsAPI_DB saudáveis e volumes preservados na Railway. Conexão OAuth retorna somente nomes de variáveis e não executa comandos no volume; acesso CLI/SSH para backup consistente e chave original ainda precisa ser habilitado. Não parar o serviço antes desse acesso e do backup.
+Envios rotineiros de texto/anexos/contatos/localização e upload deixam de gerar auditoria por mensagem (SQLite e PostgreSQL); registros próprios das mensagens mantidos. Configurações, lifecycle, limpeza/reenvio e outras ações sensíveis continuam auditados. Nenhum histórico antigo foi excluído, nem política de retenção destrutiva aplicada. Validados 64 testes SQLite e 8 da API PostgreSQL. Código somente na branch de preparação. Próximo: obter acesso CLI/SSH, conferir CI real, backup/chave, validar destino/TLS/role, drenar e executar migração na janela autorizada; preservar retorno sem repetir envios.

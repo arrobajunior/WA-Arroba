@@ -49,7 +49,7 @@ test('settings and API audit preserve integration attribution and exclude messag
   const read=await f.api('instance/settings');assert.equal(read.body.sendDelay,2);assert.equal(read.body.webhook_message_received,false);
   await f.api('messages/chat',{method:'POST',data:{to:'5511888888888',body:'synthetic-private-conversation'}});const events=await f.activity.list();assert.ok(events.events.some(e=>e.actor_kind==='api'&&e.actor_id==='api:'+id&&e.outcome==='success'));
   const serialized=JSON.stringify(events);assert.ok(!serialized.includes(token));assert.ok(!serialized.includes('synthetic-private-secret'));assert.ok(!serialized.includes('synthetic-private-conversation'));
-  const queued=events.events.find(e=>e.action==='api.messages.chat'&&e.outcome==='success');assert.ok(queued);
+  assert.ok(!events.events.some(e=>e.action==='api.messages.chat'));assert.equal((await f.db.get('SELECT count(*) AS n FROM messages')).n,1);
 });
 test('QR endpoints preserve JSON/PNG contracts and await restart/logout with integration attribution',async t=>{
   const f=await apiFixture(t),id=f.ids[0];const qr=await f.api('instance/qrCode');assert.equal(qr.status,200);assert.equal(qr.body.qrCode,null);assert.equal(f.sockets.length,1);

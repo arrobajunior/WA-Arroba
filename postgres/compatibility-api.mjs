@@ -1,3 +1,4 @@
+const routineMessageActions=new Set(['media/upload',...['chat','link','contact','location','vcard','image','audio','voice','video','document','sticker'].map(k=>'messages/'+k)]);
 import {randomBytes} from 'node:crypto';
 import QRCode from 'qrcode';
 import {equal} from '../auth.mjs';
@@ -47,7 +48,7 @@ export function createPostgresCompatibilityApi({store,transport,relay,baseUrl,le
     const bearer=req.headers.authorization?.startsWith('Bearer ')?req.headers.authorization.slice(7):null,token=bearer||input.token||url.searchParams.get('token');
     const row=await authenticate(db,id,token);let auditContext,auditDone=false;
     const startsConnection=method==='GET'&&['instance/qr','instance/qrCode'].includes(action)&&transport.state(id).status==='disconnected';
-    if(activity&&(method==='POST'||startsConnection))auditContext=await activity.begin({instance:row,actor:activity.apiActor(id),action:'api.'+action.replaceAll('/','.'),source:'api',before:action==='instance/settings'?activity.snapshot(row):{},details:{method},peer_ip:req.socket.remoteAddress||''});
+    if(activity&&(startsConnection||(method==='POST'&&!routineMessageActions.has(action))))auditContext=await activity.begin({instance:row,actor:activity.apiActor(id),action:'api.'+action.replaceAll('/','.'),source:'api',before:action==='instance/settings'?activity.snapshot(row):{},details:{method},peer_ip:req.socket.remoteAddress||''});
     const finish=async(error,current=row)=>{if(auditContext)await activity.finish(auditContext,{after:!error&&action==='instance/settings'?activity.snapshot(current):{},...(error?{error,status:error.status||500}:{})});};
     // Credentials/quota are checked again after any awaited media processing, inside the mutation.
     async function mutation(operation){

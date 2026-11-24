@@ -1,3 +1,4 @@
+const routineMessageActions=new Set(['media/upload',...['chat','link','contact','location','vcard','image','audio','voice','video','document','sticker'].map(k=>'messages/'+k)]);
 import {randomBytes} from 'node:crypto';
 import QRCode from 'qrcode';
 import {mediaInput,multipart} from './media-input.mjs';
@@ -52,7 +53,7 @@ export function createCompatibilityApi({store,transport,relay,baseUrl,legacy,jso
   if(!supported.has(action))throw fail(501,'not_implemented','Operação ainda não implementada nesta API.');
   let auditContext=null;
   const startsConnection=method==='GET'&&['instance/qr','instance/qrCode'].includes(action)&&transport.state(id).status==='disconnected';
-  if(activity&&(method==='POST'||startsConnection)){
+  if(activity&&(startsConnection||(method==='POST'&&!routineMessageActions.has(action)))){
    const before=action==='instance/settings'?activity.snapshot(row):{};
    auditContext=activity.begin({instance:row,actor:activity.apiActor(id),action:'api.'+action.replaceAll('/','.'),source:'api',before,details:{method},peer_ip:req.socket.remoteAddress||''});
    // Completion records only the status and an allowlisted configuration snapshot, never request bodies/tokens.

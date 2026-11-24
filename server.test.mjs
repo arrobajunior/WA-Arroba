@@ -77,7 +77,7 @@ test('security audit records real actors, sensitive actions and failures, separa
  assert.ok(history.events.some(e=>e.action==='instance_updated'&&e.outcome==='failed'&&e.details.error_code==='invalid_webhook_url'));
  const number=history.events.find(e=>e.action==='connection_number_changed');assert.equal(number.actor_id,second.user.id);assert.deepEqual(number.before,{phone:'5511111111111'});assert.deepEqual(number.after,{phone:'5522222222222'});
  assert.ok(history.events.some(e=>e.action==='connection_lost'&&e.actor_kind==='system'&&e.details.code===408));assert.ok(history.events.some(e=>e.action==='api.instance.settings'&&e.actor_kind==='api'&&e.outcome==='success'));
- assert.ok(history.events.some(e=>e.action==='api.messages.chat'&&e.actor_kind==='api'));assert.ok(!history.events.some(e=>e.instance_id===otherInstance.id));
+ assert.ok(!history.events.some(e=>e.action==='api.messages.chat'));assert.ok(!history.events.some(e=>e.instance_id===otherInstance.id));
  const raw=JSON.stringify(history);for(const secret of [i.token,newToken,'hook-password','secret-path','secret-query','CONFIDENTIAL_MESSAGE_BODY'])assert.ok(!raw.includes(secret),secret);
  const filtered=(await app.request('/api/general-admin/activity?instance_id='+i.id+'&actor_id='+second.user.id+'&action=token_rotated&outcome=success',{cookie:root})).body;assert.equal(filtered.total,1);assert.equal(filtered.events[0].actor_id,second.user.id);
  const scoped=(await app.request('/api/instances/'+i.id+'/activity?instance_id='+otherInstance.id,{cookie:owner.cookie})).body;assert.ok(scoped.events.every(e=>e.instance_id===i.id));
