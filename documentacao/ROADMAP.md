@@ -169,3 +169,11 @@ Não foi feita atualização da biblioteca Baileys.
 - [ ] Construir e executar imagem Docker isolada; Docker indisponível neste ambiente, build ainda não homologado.
 - [ ] PostgreSQL real isolado: TLS/privilégios/importação autorizada/backup/restore/múltiplas conexões, depois carga 100+ e recursos.
 - [ ] Planejar janela/reversão e testes reais autorizados. Não fazer merge/main/deploy/migração final ou alterar variáveis de produção ainda.
+
+## PostgreSQL — ensaio automatizado preparado
+- [x] Workflow sem secrets/deploy para construir imagem e testar PostgreSQL local TLS com dados sintéticos.
+- [x] Ensaio de permissões/owner concorrente/claim/ACK, HTTP da imagem e dump/restore das 17 tabelas.
+- [x] Local: 94 PG aprovados, 1 ensaio real ignorado, 64 SQLite aprovados; YAML/sintaxe conferidos.
+- [ ] Conferir aprovação real do workflow Actions do commit; corrigir qualquer falha antes de considerar imagem/TCP/TLS/restore homologados.
+- [ ] Carga100+ e validação do destino isolado autorizado; depois planejar janela/reversão e homologar WhatsApp/SMTP com autorização.
+- [ ] Não fazer merge/deploy/importação final ou mudar variáveis de produção ainda.

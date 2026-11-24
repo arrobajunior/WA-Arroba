@@ -79,3 +79,6 @@ Em 23/11/2026, criada fábrica explícita postgres/server.mjs: recuperação/res
 
 ## PostgreSQL — entrada e build preparados
 24/11/2026: runtime/start:postgres e Dockerfile.postgres separados, com opt-in explícito, TLS/config validados e supervisão de sinais/listen/readiness. 94 testes PostgreSQL locais e 64 SQLite aprovados, incluindo subprocesso TCP/SIGTERM; imagem Docker ainda não construída por falta de Docker neste ambiente. npm start/Dockerfile operacional/main continuam SQLite. Retomar na oitava etapa de POSTGRESQL.md: construir imagem isolada e validar banco/TLS/privilégios/backup/carga reais, sem deploy antes do aviso do Arroba.
+
+## PostgreSQL — ensaio de imagem e banco real automatizado
+24/11/2026: workflow isolado no GitHub prepara build Docker, PostgreSQL TLS local, role restrita/concorrência, partida/encerramento da imagem e pg_dump/restore comparando 17 tabelas. Localmente: 94 testes PG aprovados, 1 ensaio real ignorado por falta de Docker/PostgreSQL, 64 SQLite aprovados. Não confundir skip/preparação com execução real aprovada. Próximo: acompanhar Actions do commit e resolver falhas, depois carga/destino isolado autorizado. Nenhuma alteração de produção. Ler nona etapa em POSTGRESQL.md.

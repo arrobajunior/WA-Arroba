@@ -130,3 +130,9 @@ Usuário autorizou adiantar sem subir. Criados schema de transferência, snapsho
 - Runtime encerra ao perder readiness; drena sem process.exit forçado. Dockerfile operacional, npm start e produção preservados.
 - 94 testes PostgreSQL e 64 SQLite aprovados, com nove testes de runtime/build/subprocesso. Docker indisponível: não houve build/executação de imagem nem conexão Railway/WhatsApp/SMTP real.
 - Próximo: construir imagem e validar PostgreSQL isolado real/TLS/privilégios/backup/restauração/concorrência/carga antes de planejar virada autorizada. Ver POSTGRESQL.md.
+
+## 24/11/2026 — Ensaio isolado no GitHub Actions
+- Criados workflow postgres-rehearsal e real.test.mjs para build/imagem, TCP/TLS/CA, role restrita, ownership/claim com conexões reais e dump/restore integral, somente dados sintéticos e containers efêmeros.
+- Workflow não usa secrets, não publica imagem e não faz deploy. Produção/main/variáveis preservados.
+- Local: 94 PG aprovados + 1 real ignorado, 64 SQLite aprovados; YAML/sintaxe validados. Execução de CI ainda precisa ser conferida, sem presumir aprovação do build/ensaio real.
+- Próximo: acompanhar Actions e corrigir resultado, depois carga100+/particularidades do destino isolado autorizado. Ver POSTGRESQL.md.

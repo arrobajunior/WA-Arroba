@@ -1,0 +1,57 @@
+name: PostgreSQL isolated rehearsal
+on:
+  push:
+    branches: [preparacao/postgresql]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  synthetic-rehearsal:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.21.0
+          cache: npm
+      - name: Install locked test dependencies
+        run: |
+          git config --global url."https://github.com/".insteadOf ssh://git@github.com/
+          npm ci --ignore-scripts
+      - name: Existing and embedded tests
+        run: |
+          npm test
+          npm run test:postgres
+      - name: Build separate PostgreSQL image
+        run: docker build -f Dockerfile.postgres -t wa-postgres:rehearsal .
+      - name: Image refuses implicit activation
+        run: |
+          set +e
+          docker run --rm wa-postgres:rehearsal > "$RUNNER_TEMP/image-check.log" 2>&1
+          result=$?
+          set -e
+          test "$result" = 1
+          grep -q 'Falha no serviço' "$RUNNER_TEMP/image-check.log"
+      - name: Start disposable PostgreSQL with verified TLS
+        run: |
+          mkdir -p "$RUNNER_TEMP/wa-tls"
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1 -keyout "$RUNNER_TEMP/wa-tls/server.key" -out "$RUNNER_TEMP/wa-tls/server.crt" -subj '/CN=localhost' -addext 'subjectAltName=IP:127.0.0.1,DNS:localhost'
+          chmod 600 "$RUNNER_TEMP/wa-tls/server.key"
+          sudo chown 999:999 "$RUNNER_TEMP/wa-tls/server.key"
+          docker run -d --name wa-pg-ci-test -e POSTGRES_PASSWORD=synthetic-ci-only -e POSTGRES_DB=wa_rehearsal_ci -p 127.0.0.1:5432:5432 -v "$RUNNER_TEMP/wa-tls:/tls:ro" postgres:17-bookworm -c ssl=on -c ssl_cert_file=/tls/server.crt -c ssl_key_file=/tls/server.key
+          for attempt in $(seq 1 30); do
+            if docker exec wa-pg-ci-test pg_isready -U postgres -d wa_rehearsal_ci; then exit 0; fi
+            sleep 1
+          done
+          exit 1
+      - name: Real TCP TLS privileges ownership concurrency and dump restore
+        env:
+          PG_REHEARSAL_ADMIN_URL: postgres://postgres:synthetic-ci-only@127.0.0.1:5432/wa_rehearsal_ci
+          PG_REHEARSAL_ALLOW_CREATE: synthetic-only
+          PG_REHEARSAL_CONTAINER: wa-pg-ci-test
+          PG_REHEARSAL_CA_FILE: ${{ runner.temp }}/wa-tls/server.crt
+        run: node --test postgres/real.test.mjs
+      - name: Clean disposable container
+        if: always()
+        run: docker rm -f wa-runtime-ci-test wa-pg-ci-test || true

@@ -19,7 +19,7 @@ Não houve acesso a conversas reais, leitura de segredos, conexão ao PostgreSQL
 
 ## Testes
 npm test: suíte operacional existente (64 testes).
-npm run test:postgres: 94 testes (6 de transferência + 11 da camada assíncrona/repositórios + 10 de controle/HTTP + 10 de alertas + 6 de credenciais/ordenação + 5 de fila + 4 de propriedade + 14 de transporte + 8 da API compatível + 3 de lifecycle/painel + 8 de composição do servidor + 9 de runtime/build). Usam PostgreSQL embarcado PGlite com dados sintéticos; concorrência entre conexões também tem teste de isolamento com pool simulado. Cobrem backup/WAL, chaves, blobs, Unicode, IDs, rollback, privilégios, auditoria, horários e erros sem conteúdo sensível.
+npm run test:postgres: 95 testes (94 locais e 1 ensaio real opcional; a divisão dos 94 locais é 6 de transferência + 11 da camada assíncrona/repositórios + 10 de controle/HTTP + 10 de alertas + 6 de credenciais/ordenação + 5 de fila + 4 de propriedade + 14 de transporte + 8 da API compatível + 3 de lifecycle/painel + 8 de composição do servidor + 9 de runtime/build). Usam PostgreSQL embarcado PGlite com dados sintéticos; concorrência entre conexões também tem teste de isolamento com pool simulado. Cobrem backup/WAL, chaves, blobs, Unicode, IDs, rollback, privilégios, auditoria, horários e erros sem conteúdo sensível.
 Não é uma validação da conexão TCP/TLS nem do PostgreSQL real provisionado. Não é teste de capacidade para 100 sessões nem homologação WhatsApp real.
 
 ## Comandos de ensaio — só com dados sintéticos/cópia autorizada
@@ -231,3 +231,18 @@ A receita futura de imagem é docker build -f Dockerfile.postgres; a escolha no 
 
 ### Próximo passo concreto
 Construir/executar Dockerfile.postgres em ambiente com Docker e dados sintéticos; depois ensaiar PostgreSQL real isolado com TCP/TLS, usuário restrito, importação/cópia autorizada, backup/restauração e múltiplas conexões. Verificar limites/memória/CPU para 100+ instâncias e plano de janela/drenagem/reversão. Testar WhatsApp/SMTP reais somente quando autorizado. Não fazer merge/main/deploy/importação final nem mudar variáveis de produção. A virada exige parar os sockets antigos SQLite antes de restaurar sessões no novo processo.
+
+
+## Ensaio automatizado isolado — 24/11/2026, nona etapa
+- Adicionado .github/workflows/postgres-rehearsal.yml, executado por push em preparacao/postgresql ou manualmente. Permissão contents:read, sem secrets Railway/SES, sem deploy, registro de imagem ou alteração de main. Usa runner efêmero ubuntu, Node e PostgreSQL 17 local em container com certificado TLS sintético de um dia.
+- Etapas: npm ci e suítes existentes; construir Dockerfile.postgres; conferir que imagem recusa ativação implícita; iniciar PostgreSQL TLS; executar postgres/real.test.mjs; remover containers ao concluir ou falhar. Teste é limitado a 20min pelo workflow, sem forçar drenagem do serviço de produção (nenhum é iniciado).
+- real.test.mjs exige PG_REHEARSAL_ALLOW_CREATE=synthetic-only, URL loopback para banco wa_rehearsal_ci, CA explícita e nome de container wa-pg-ci-*. Não fornecer credenciais Railway ou dados reais. Cria origem SQLite/chave/dados sintéticos temporários, snapshot e schema aleatório; importa com verificações existentes.
+- Abre runtime com role aleatória NOSUPERUSER/NOCREATEDB/NOCREATEROLE/NOBYPASSRLS e grants de dados, sem CREATE schema e sem UPDATE/DELETE na auditoria. Confere TLS efetivo no pg_stat_ssl, rejeição sem CA, proteção de Master/DDL, exclusão entre owners em conexões reais, três claims simultâneos em pool e ACK sem regressão.
+- Inicia a imagem construída contra esse schema sintético, sem restaurar sessões nem configurar SMTP. Confere readiness/autorização HTTP e docker stop com exit0; retoma ownership após saída. Faz pg_dump/pg_restore reais em segundo banco temporário e compara todas as colunas/linhas das 17 tabelas. Remove somente recursos que criou; nenhum dump/arquivo de chave é publicado como artefato.
+
+### Estado da validação
+Local: 95 testes encontrados na suíte PostgreSQL, 94 aprovados e 1 ignorado intencionalmente por ausência do PostgreSQL/Docker isolados; 64 testes SQLite aprovados. YAML e sintaxe do teste conferidos. O skip NÃO é aprovação do ensaio TCP/TLS/imagem/restore.
+O workflow foi preparado para execução no GitHub; conferir a execução do commit na aba Actions antes de marcar build/ensaio real como aprovados. Este ambiente ainda não tem Docker/PostgreSQL. Nenhum resultado de CI ou de banco real deve ser presumido a partir dos testes locais. Link: https://github.com/arrobajunior/WA-Arroba/actions/workflows/postgres-rehearsal.yml
+
+### Próximo passo concreto
+Acompanhar Actions e corrigir qualquer falha do build/ensaio antes de prosseguir. Depois testar carga/distribuição de 100+ instâncias e validar particularidades de TLS/rede/usuário do destino Railway em ambiente isolado autorizado. Ensaios sintéticos NÃO homologam WhatsApp/SMTP reais, capacidade de 100 sessões ou virada sem interrupção. Main/deploy/variáveis/importação final permanecem bloqueados até aviso do Arroba; preservar sessões/volume e parar sockets SQLite antigos na janela de virada.
