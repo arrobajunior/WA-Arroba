@@ -52,6 +52,22 @@ test('separate Docker recipe includes runtime relative import closure and leaves
  const {readFile}=await import('node:fs/promises');const path=await import('node:path');
  const docker=await readFile('Dockerfile.postgres','utf8'),legacy=await readFile('Dockerfile','utf8'),pkg=JSON.parse(await readFile('package.json','utf8'));assert.match(legacy,/CMD \["node", "server.mjs"\]/);assert.equal(pkg.scripts.start,'node server.mjs');assert.match(docker,/CMD \["node", "scripts\/start-postgres.mjs"\]/);
  const copied=new Set();for(const line of docker.split('\n'))if(line.startsWith('COPY ')){const parts=line.split(/\s+/).slice(1).filter(x=>!x.startsWith('--'));for(const source of parts.slice(0,-1))copied.add(source);}
- const visited=new Set();async function visit(file){if(visited.has(file))return;visited.add(file);assert.ok(copied.has(file),'Missing build source: '+file);const code=await readFile(file,'utf8');for(const match of code.matchAll(/(?:from\s*|import\s*)['"](\.[^'"]+)['"]/g)){const dep=path.posix.normalize(path.posix.join(path.posix.dirname(file),match[1]));await visit(dep);}}
- await visit('scripts/start-postgres.mjs');assert.ok(copied.has('postgres/manifest.json'));assert.ok(copied.has('public'));assert.ok(![...copied].some(p=>p.includes('test-fixture')||p.includes('transfer.mjs')));
+ const visited=new Set();async function visit(file){if(visited.has(file))return;visited.add(file);assert.ok(copied.has(file),'Missing build source: '+file);const code=await readFile(file,'utf8');for(const match of code.matchAll(/(?:from\s*|import\s*(?:\(\s*)?)['"](\.[^'"]+)['"]/g)){const dep=path.posix.normalize(path.posix.join(path.posix.dirname(file),match[1]));await visit(dep);}}
+ await visit('scripts/start-postgres.mjs');assert.ok(copied.has('postgres/transfer.mjs'));assert.ok(copied.has('postgres/schema.sql'));assert.ok(copied.has('postgres/invariants.sql'));assert.ok(copied.has('postgres/manifest.json'));assert.ok(copied.has('public'));assert.ok(![...copied].some(p=>p.includes('test-fixture')));
+});
+
+test('restricted credential file overrides admin environment URL and refuses insecure files or schema mismatch',async()=>{
+ const {mkdtemp,writeFile,chmod,rm}=await import('node:fs/promises');const {tmpdir}=await import('node:os');const path=await import('node:path');const dir=await mkdtemp(path.join(tmpdir(),'wa-config-')),file=path.join(dir,'runtime.json');
+ try{await writeFile(file,JSON.stringify({databaseUrl:'postgres://restricted:synthetic@localhost/test',schema:'wa_app'}),{mode:0o600});
+ const result=await postgresRuntimeConfig({...env,PG_RUNTIME_CONFIG_FILE:file});assert.equal(new URL(result.options.storeOptions.databaseUrl).username,'restricted');
+ await assert.rejects(postgresRuntimeConfig({...env,PG_RUNTIME_CONFIG_FILE:file,PG_SCHEMA:'wa_rehearsal_other'}));await chmod(file,0o644);await assert.rejects(postgresRuntimeConfig({...env,PG_RUNTIME_CONFIG_FILE:file}));
+ }finally{await rm(dir,{recursive:true,force:true});}
+});
+
+test('maintenance subprocess stays healthy but blocks API and readiness, then exits cleanly on SIGTERM',async()=>{
+ const probe=http.createServer();probe.listen(0,'127.0.0.1');await once(probe,'listening');const port=probe.address().port;await new Promise(r=>probe.close(r));
+ const child=spawn(process.execPath,['scripts/start-postgres.mjs'],{env:{PATH:process.env.PATH,PG_RUNTIME_ENABLED:'true',PG_MAINTENANCE:'true',HOST:'127.0.0.1',PORT:String(port)},stdio:['ignore','pipe','pipe']});const ended=once(child,'exit');
+ try{await new Promise((resolve,reject)=>{child.stdout.on('data',c=>{if(String(c).includes('Ativa'))resolve();});child.on('error',reject);child.on('exit',()=>reject(Error('MAINTENANCE_EARLY_EXIT')));});
+ assert.deepEqual(await(await fetch(`http://127.0.0.1:${port}/api/maintenance`)).json(),{maintenance:true});assert.equal((await fetch(`http://127.0.0.1:${port}/api/health`)).status,200);for(const route of ['/api/ready','/api/dashboard','/instanceaaaa1111/messages/chat'])assert.equal((await fetch(`http://127.0.0.1:${port}${route}`)).status,503);
+ }finally{child.kill('SIGTERM');const [code]=await ended;assert.equal(code,0);}
 });

@@ -1,4 +1,4 @@
-import {readFile} from 'node:fs/promises';
+import {readFile,lstat} from 'node:fs/promises';
 import {createPostgresApp} from './server.mjs';
 import {postgresPoolOptions} from './database.mjs';
 
@@ -10,14 +10,19 @@ export async function postgresRuntimeConfig(env){
   if(!host||/[\s/]/.test(host))invalid();
   let url;try{url=new URL(env.PUBLIC_URL);}catch{invalid();}
   if(!['http:','https:'].includes(url.protocol)||url.username||url.password||url.pathname!=='/'||url.search||url.hash)invalid();
-  const schema=env.PG_SCHEMA||'wa_app';if(!/^wa_(app|rehearsal_[a-z0-9_]{1,40})$/.test(schema))invalid();
+  let fileConfig;
+  if(env.PG_RUNTIME_CONFIG_FILE){
+    try{const info=await lstat(env.PG_RUNTIME_CONFIG_FILE);if(!info.isFile()||(info.mode&0o077)!==0)invalid();fileConfig=JSON.parse(await readFile(env.PG_RUNTIME_CONFIG_FILE,'utf8'));if(!fileConfig||typeof fileConfig.databaseUrl!=='string'||typeof fileConfig.schema!=='string'||Object.keys(fileConfig).some(k=>!['databaseUrl','schema'].includes(k)))invalid();if(env.PG_SCHEMA&&env.PG_SCHEMA!==fileConfig.schema)invalid();}catch{throw Error('POSTGRES_RUNTIME_FILE_INVALID');}
+  }
+  const databaseUrl=fileConfig?fileConfig.databaseUrl:env.DATABASE_URL;
+  const schema=env.PG_SCHEMA||fileConfig?.schema||'wa_app';if(!/^wa_(app|rehearsal_[a-z0-9_]{1,40})$/.test(schema))invalid();
   if(env.PG_RESTORE_CONNECTIONS!==undefined&&!['true','false'].includes(env.PG_RESTORE_CONNECTIONS))invalid();
   const max=integer('PG_POOL_MAX',10,1,30),perOwnerLimit=integer('PG_INSTANCE_LIMIT',50,1,10000);
   let ssl;if(env.PG_CA_FILE){try{ssl={ca:await readFile(env.PG_CA_FILE,'utf8')};}catch{throw Error('POSTGRES_CA_UNAVAILABLE');}if(!ssl.ca.trim())invalid();}
   // Validate before constructing the application; never log the input URL/key or filesystem errors.
-  postgresPoolOptions({databaseUrl:env.DATABASE_URL,max,ssl});
+  postgresPoolOptions({databaseUrl,max,ssl});
   if(!env.DATA_DIR&&!env.PERSISTENCE_KEY_BASE64)throw Error('MASTER_KEY_REQUIRED');
-  return {host,port,options:{publicUrl:url.origin,restoreConnections:env.PG_RESTORE_CONNECTIONS==='true',perOwnerLimit,storeOptions:{databaseUrl:env.DATABASE_URL,schema,max,ssl,dataDir:env.DATA_DIR,keyBase64:env.PERSISTENCE_KEY_BASE64}}};
+  return {host,port,options:{publicUrl:url.origin,restoreConnections:env.PG_RESTORE_CONNECTIONS==='true',perOwnerLimit,storeOptions:{databaseUrl,schema,max,ssl,dataDir:env.DATA_DIR,keyBase64:env.PERSISTENCE_KEY_BASE64}}};
 }
 
 // Signals are registered before async startup. A signal during startup waits for the
