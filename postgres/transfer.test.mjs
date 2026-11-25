@@ -94,3 +94,22 @@ test('verification detects a wrong destination row and rolls back without loggin
   await assert.rejects(transferSnapshot(client,copy,{schema:'wa_rehearsal_badcopy',apply:true}),e=>e.code==='TARGET_VERIFICATION_FAILED');
   assert.equal((await pg.query("SELECT 1 FROM pg_namespace WHERE nspname='wa_rehearsal_badcopy'")).rows.length,0);
 });
+
+
+test('historical physical column order preserves snapshot hashes and every imported value',async t=>{
+  const {source,copy,db,pg}=await fixture(t),before=inspectSource(db);
+  db.exec('PRAGMA foreign_keys=OFF');
+  for(const name of ['instances','messages']){
+    const columns=db.prepare(`PRAGMA table_info("${name}")`).all().reverse();
+    const objects=db.prepare("SELECT sql FROM sqlite_schema WHERE tbl_name=? AND type IN ('trigger','index') AND sql IS NOT NULL").all(name);
+    const names=columns.map(c=>'"'+c.name+'"').join(',');
+    db.exec(`CREATE TABLE "reordered_${name}" (${columns.map(c=>'"'+c.name+'" '+c.type+(c.pk?' PRIMARY KEY':'')).join(',')})`);
+    db.exec(`INSERT INTO "reordered_${name}" (${names}) SELECT ${names} FROM "${name}"`);
+    db.exec(`DROP TABLE "${name}"`);db.exec(`ALTER TABLE "reordered_${name}" RENAME TO "${name}"`);
+    for(const object of objects)db.exec(object.sql);
+  }
+  db.exec('PRAGMA foreign_keys=ON');assert.deepEqual(inspectSource(db),before);
+  await createSnapshot(source,copy);await transferSnapshot(pg,copy,{schema:'wa_rehearsal_order',apply:true});
+  assert.equal((await pg.query('SELECT body FROM wa_rehearsal_order.messages')).rows[0].body,'Olá 💬\n"texto"');
+  assert.equal((await pg.query('SELECT token FROM wa_rehearsal_order.instances')).rows[0].token,db.prepare('SELECT token FROM instances').get().token);
+});

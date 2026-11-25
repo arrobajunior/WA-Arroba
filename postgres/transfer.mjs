@@ -8,6 +8,9 @@ const schemaSql=await readFile(new URL('./schema.sql',import.meta.url),'utf8');
 const invariantsSql=await readFile(new URL('./invariants.sql',import.meta.url),'utf8');
 const identifier=value=>'"'+value.replaceAll('"','""')+'"';
 const fail=code=>Object.assign(new Error(code),{code});
+// Historical ALTER TABLE migrations can produce another physical column order.
+// Values, hashes and INSERT lists are always addressed by the manifest's column names.
+const columnSignature=columns=>JSON.stringify([...columns].sort((a,b)=>a.name<b.name?-1:a.name>b.name?1:0));
 const order=(t,pg=false)=>t.columns.filter(c=>c.pk).sort((a,b)=>a.pk-b.pk).map(c=>identifier(c.name)+(pg&&c.type==='TEXT'?' COLLATE "C"':'')).join(',');
 const normalized=(value,type)=>value===null?null:type==='BLOB'?['bytes',Buffer.from(value).toString('base64')]:type==='INTEGER'?['int',String(value)]:['text',value];
 function addRow(hash,row,t){
@@ -27,7 +30,7 @@ export function inspectSource(db){
   const result={};
   for(const t of manifest){
     const actual=db.prepare(`PRAGMA table_info(${identifier(t.name)})`).all().map(c=>({name:c.name,type:c.type,pk:c.pk}));
-    if(JSON.stringify(actual)!==JSON.stringify(t.columns))throw fail('SOURCE_SCHEMA_MISMATCH');
+    if(columnSignature(actual)!==columnSignature(t.columns))throw fail('SOURCE_SCHEMA_MISMATCH');
     result[t.name]=sourceDigest(db,t);
   }
   return result;
