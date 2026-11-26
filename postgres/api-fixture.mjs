@@ -22,7 +22,7 @@ export async function apiFixture(t,{mediaLoader,legacy=()=>null,transportOptions
   const ownership={active:()=>true,assert:async()=>{},onLost:()=>()=>{}};
   let base;
   const transport=createPostgresTransport(f.store,{ownership,mediaRelay:relay,legacyStorage:legacy,mediaBaseUrl:'https://synthetic.example.test',webhookRetryMs:1,socketFactory:config=>{
-    const socket={config,ev:new EventEmitter(),user:{id:'5511000000000@s.whatsapp.net',name:'Synthetic'},sends:[],ends:0,logouts:0,end(){this.ends++;},async logout(){this.logouts++;},async sendMessage(jid,content,options){this.sends.push({jid,content,options});this.ev.emit('messages.update',[{key:{id:options.messageId,remoteJid:jid,fromMe:true},update:{status:3}}]);return {};},profilePictureUrl:async()=>'',updateMediaMessage:async()=>{}};sockets.push(socket);return socket;
+    const socket={config,ev:new EventEmitter(),onWhatsApp:async jid=>[{exists:true,jid}],user:{id:'5511000000000@s.whatsapp.net',name:'Synthetic'},sends:[],ends:0,logouts:0,end(){this.ends++;},async logout(){this.logouts++;},async sendMessage(jid,content,options){this.sends.push({jid,content,options});this.ev.emit('messages.update',[{key:{id:options.messageId,remoteJid:jid,fromMe:true},update:{status:3}}]);return {};},profilePictureUrl:async()=>'',updateMediaMessage:async()=>{}};sockets.push(socket);return socket;
   },...transportOptions,onConnectionState:alerts.stateChanged,webhookSender:async(url,payload)=>hooks.push({url,payload})});
   let control,compatibility;
   const server=http.createServer(async(req,res)=>{

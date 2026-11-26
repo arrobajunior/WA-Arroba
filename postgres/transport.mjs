@@ -89,7 +89,7 @@ export function createPostgresTransport(store,{ownership,socketFactory=makeWASoc
     await assertActive(id);const previous=entries.get(id);
     if(previous&&((!attempt&&['initialize','qr','authenticated','retrying','disconnecting'].includes(previous.status))||(attempt&&previous.sawOpen)))return state(id);
     await teardown(previous);await queue.recoverInterrupted(id);
-    const e={id,status:'initialize',qr:null,error:null,socket:null,timer:null,auditContext,invalid:false,stopping:false,sawOpen:false,contacts:new Map(),chats:new Map(),messages:new Map(),webhooked:new Map(),invalidContacts:new Map(),hooks:new Set(),control:createSerialTasks(),messagesQueue:createSerialTasks()};entries.set(id,e);
+    const e={id,status:'initialize',qr:null,error:null,socket:null,timer:null,auditContext,invalid:false,stopping:false,sawOpen:false,contacts:new Map(),chats:new Map(),messages:new Map(),webhooked:new Map(),invalidContacts:new Map(),recipientAddresses:new Map(),hooks:new Set(),control:createSerialTasks(),messagesQueue:createSerialTasks()};entries.set(id,e);
     const isValid=()=>valid(e);
     try{
       const credentials=await createPostgresAuthState(store,id,{valid:isValid});e.auth=credentials;e.credentials=credentials.state;
@@ -179,11 +179,22 @@ export function createPostgresTransport(store,{ownership,socketFactory=makeWASoc
     return state(id);
   }
   const connect=(id,attempt=0,context=null)=>commands.run(id,()=>open(id,attempt,context));
+  async function canonicalRecipient(e,jid){
+    // Groups and LIDs already carry their own identity. Never guess/remove phone digits.
+    if(!/^\d{6,20}@s\.whatsapp\.net$/.test(jid))return jid;
+    const cached=e.recipientAddresses.get(jid);if(cached&&cached.expires>now())return cached.jid;
+    let result;try{result=await e.socket.onWhatsApp(jid);}catch{throw fail('recipient_lookup_failed','Não foi possível validar o destinatário no WhatsApp. Nenhum envio foi iniciado.');}
+    if(!Array.isArray(result))throw fail('recipient_lookup_failed','Não foi possível validar o destinatário no WhatsApp. Nenhum envio foi iniciado.');
+    if(!result[0]?.exists)throw fail('recipient_not_registered','Destinatário não encontrado no WhatsApp. Confira o número.');
+    const canonical=typeof result[0].jid==='string'?whatsappJid(result[0].jid):'';
+    if(!/^\d{6,20}@s\.whatsapp\.net$/.test(canonical))throw fail('recipient_lookup_failed','O WhatsApp não retornou um telefone válido. Nenhum envio foi iniciado.');
+    remember(e.recipientAddresses,jid,{jid:canonical,expires:now()+300000});return canonical;
+  }
   async function runQueue(id){
     while(!closed&&!closing){
       const e=entries.get(id);if(!e||e.stopping||!valid(e)||e.status!=='authenticated')return;
       const row=await queue.claim(id,generateMessageID());if(!row)return;
-      const jid=row.recipient.includes('@')?row.recipient.replace('@c.us','@s.whatsapp.net'):`${row.recipient.replace(/^\+/,'')}@s.whatsapp.net`;
+      let jid=row.recipient.includes('@')?row.recipient.replace('@c.us','@s.whatsapp.net'):`${row.recipient.replace(/^\+/,'')}@s.whatsapp.net`;
       let attempted=false;
       try{
         let content={text:row.body};const payload=JSON.parse(row.payload||'{}');
@@ -194,6 +205,7 @@ export function createPostgresTransport(store,{ownership,socketFactory=makeWASoc
           if(!bytes){await queue.finish(row,{status:'unsent',error:'Mídia temporária indisponível; reenvie pelo sistema cliente.'});continue;}
           if(row.type==='image')content={image:bytes,caption:row.body,mimetype};else if(row.type==='video')content={video:bytes,caption:row.body,mimetype};else if(row.type==='document')content={document:bytes,caption:row.body,mimetype,fileName:row.filename||'file'};else if(row.type==='sticker')content={sticker:bytes};else content={audio:bytes,mimetype,ptt:row.type==='ptt'};
         }else if(row.type==='link')content={text:row.body,linkPreview:null};else if(row.type==='location')content={location:{degreesLatitude:payload.lat,degreesLongitude:payload.lng,address:payload.address}};else if(row.type==='vcard')content={contacts:{displayName:'Contato',contacts:[{vcard:payload.vcard}]}};else if(row.type==='contact')content={contacts:{displayName:'Contatos',contacts:payload.contacts}};
+        jid=await canonicalRecipient(e,jid);
         if(closed||closing||!valid(e)||e.stopping||e.status!=='authenticated'||!await queue.allowed(id)){await queue.releaseUnsent(row);return;}
         attempted=true;await e.socket.sendMessage(jid,content,{messageId:row.provider_id});await queue.finish(row);
         if(!e.webhooked.has(row.provider_id)){
@@ -204,7 +216,7 @@ export function createPostgresTransport(store,{ownership,socketFactory=makeWASoc
         }
       }catch(error){
         if(!ownership.active())return;
-        if(attempted)await queue.finish(row,{status:'unknown',error:'Envio sem confirmação; verifique o destinatário antes de reenviar.'});else await queue.finish(row,{status:'unsent',error:'Não foi possível preparar a mensagem; revise os dados antes de reenviar.'});
+        if(attempted)await queue.finish(row,{status:'unknown',error:'Envio sem confirmação; verifique o destinatário antes de reenviar.'});else await queue.finish(row,{status:'unsent',error:['recipient_lookup_failed','recipient_not_registered'].includes(error.code)?error.message:'Não foi possível preparar a mensagem; revise os dados antes de reenviar.'});
         if(error.code==='TRANSPORT_OWNERSHIP_LOST')return;
       }
       if(closed||e.stopping)return;

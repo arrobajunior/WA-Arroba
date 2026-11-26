@@ -16,7 +16,7 @@ async function fixture(t,options={}){
   const f=await postgresFixture(),ownership=syntheticOwnership(),sockets=[],hooks=[],transports=[],relay=createMediaRelay();
   await f.db.run('UPDATE instances SET settings=$1',[JSON.stringify({sendDelay:0,sendDelayMax:0})]);
   const defaults={ownership,mediaRelay:relay,retryDelay:50,webhookRetryMs:5,mediaBaseUrl:'https://synthetic.example.test',socketFactory:config=>{
-    const socket={config,ev:new EventEmitter(),user:{id:'5511000000000:1@s.whatsapp.net',name:'Synthetic'},endCalls:0,logoutCalls:0,sends:[],end(){this.endCalls++;},async logout(){this.logoutCalls++;},async sendMessage(jid,content,settings){this.sends.push({jid,content,settings});return {};},updateMediaMessage:async()=>{}};sockets.push(socket);return socket;
+    const socket={config,ev:new EventEmitter(),onWhatsApp:async jid=>[{exists:true,jid}],user:{id:'5511000000000:1@s.whatsapp.net',name:'Synthetic'},endCalls:0,logoutCalls:0,sends:[],end(){this.endCalls++;},async logout(){this.logoutCalls++;},async sendMessage(jid,content,settings){this.sends.push({jid,content,settings});return {};},updateMediaMessage:async()=>{}};sockets.push(socket);return socket;
   },webhookSender:async(url,payload)=>{hooks.push({url,payload});}};
   const create=opts=>{const transport=createPostgresTransport(f.store,{...defaults,...options,...opts});transports.push(transport);return transport;};
   const transport=create();
@@ -83,7 +83,7 @@ test('incoming LID messages resolve known phones, remain durable once and unreso
 test('recovered sockets cancel retries and the async alert integration stays quiet for natural reconnects',async t=>{
   const base=await postgresFixture(),sent=[],activity=createPostgresInstanceActivity(base.db),alerts=createPostgresConnectionAlerts(base.store,{mailReady:()=>true,sendEmail:async value=>{sent.push(value);return {};},onConnectionEvent:activity.connectionState});
   const owner=syntheticOwnership(),sockets=[];
-  const transport=createPostgresTransport(base.store,{ownership:owner,retryDelay:100,socketFactory:config=>{const s={config,ev:new EventEmitter(),user:{id:'5511000000000@s.whatsapp.net'},end(){},sendMessage:async()=>({})};sockets.push(s);return s;},onConnectionState:alerts.stateChanged});
+  const transport=createPostgresTransport(base.store,{ownership:owner,retryDelay:100,socketFactory:config=>{const s={config,ev:new EventEmitter(),onWhatsApp:async jid=>[{exists:true,jid}],user:{id:'5511000000000@s.whatsapp.net'},end(){},sendMessage:async()=>({})};sockets.push(s);return s;},onConnectionState:alerts.stateChanged});
   t.after(async()=>{await transport.close();await alerts.close();await base.close();});
   await transport.connect(base.ids[0]);const s=sockets[0];s.ev.emit('connection.update',{connection:'open'});await transport.idle();const count=(await activity.list()).total;
   s.ev.emit('connection.update',{connection:'close',lastDisconnect:{error:{output:{statusCode:428}}}});s.ev.emit('connection.update',{connection:'open'});await transport.idle();await new Promise(r=>setTimeout(r,150));await transport.idle();await alerts.drain();
@@ -108,7 +108,7 @@ test('terminal logout clears only its own credentials and exhausted retries stop
   socket.ev.emit('creds.update',{registered:true,marker:'remove-on-401'});await f.transport.idle();socket.ev.emit('connection.update',{connection:'close',lastDisconnect:{error:{output:{statusCode:401}}}});await f.transport.idle();
   assert.match(f.transport.state(id).error,/QR Code/);assert.equal((await f.db.get('SELECT count(*) AS n FROM wa_keys WHERE instance_id=$1',[id])).n,0);assert.equal((await f.db.get('SELECT auto_connect FROM instances WHERE id=$1',[id])).auto_connect,0);
   await f.transport.close();let count=0;
-  const retry=f.create({socketFactory:config=>{const s={config,ev:new EventEmitter(),user:{id:'5511000000000@s.whatsapp.net'},end(){},sendMessage:async()=>({})};count++;queueMicrotask(()=>s.ev.emit('connection.update',{connection:'close',lastDisconnect:{error:{output:{statusCode:503}}}}));return s;}});
+  const retry=f.create({socketFactory:config=>{const s={config,ev:new EventEmitter(),onWhatsApp:async jid=>[{exists:true,jid}],user:{id:'5511000000000@s.whatsapp.net'},end(){},sendMessage:async()=>({})};count++;queueMicrotask(()=>s.ev.emit('connection.update',{connection:'close',lastDisconnect:{error:{output:{statusCode:503}}}}));return s;}});
   await retry.connect(id);const deadline=Date.now()+5000;while((count<6||retry.state(id).status!=='disconnected')&&Date.now()<deadline)await new Promise(r=>setTimeout(r,10));await retry.idle();
   assert.equal(count,6);assert.equal(retry.state(id).status,'disconnected');assert.equal((await f.db.get('SELECT auto_connect FROM instances WHERE id=$1',[id])).auto_connect,0);assert.ok(events.some(e=>e[3].terminal&&e[3].reconnectAttempt===5));
 });
@@ -143,4 +143,24 @@ test('cached contacts/chats and non-queued operations still require an active au
   assert.equal((await f.transport.operation(id,'contacts','GET',{}))[0].name,'Synthetic contact');assert.equal((await f.transport.operation(id,'contacts/check','GET',{chatId:'5511888888888'})).status,'valid');assert.equal((await f.transport.me(id)).number,'5511000000000');
   await f.db.run('UPDATE users SET active=0 WHERE id=$1',[f.user.id]);await assert.rejects(f.transport.operation(id,'contacts','GET',{}),e=>e.code==='owner_disabled');
   socket.config.auth.creds.registered=true;await f.transport.disconnect(id);assert.equal(socket.logoutCalls,1);
+});
+
+test('direct sends use WhatsApp canonical phone JID, preserve requested recipient and cache per connection',async t=>{
+ let clock=Date.now();const f=await fixture(t,{now:()=>clock}),socket=await f.open();let lookups=0;
+ socket.onWhatsApp=async()=>{lookups++;return [{exists:true,jid:'551188888888@s.whatsapp.net'}];};
+ for(const id of ['canonical1','canonical2'])await f.message(id,{recipient:'5511988888888'});
+ await f.transport.flush(f.ids[0]);await f.transport.idle();assert.equal(lookups,1);assert.equal(socket.sends.length,2);assert.ok(socket.sends.every(s=>s.jid==='551188888888@s.whatsapp.net'));
+ assert.equal((await f.db.get("SELECT recipient FROM messages WHERE id='canonical1'")).recipient,'5511988888888');
+ clock+=300001;await f.message('canonical3',{recipient:'5511988888888'});await f.transport.flush(f.ids[0]);assert.equal(lookups,2);
+ await f.transport.restart(f.ids[0]);const next=f.sockets.at(-1);next.onWhatsApp=async()=>{lookups++;return [{exists:true,jid:'551188888888@s.whatsapp.net'}];};next.ev.emit('connection.update',{connection:'open'});await f.transport.idle();await f.message('canonical4',{recipient:'5511988888888'});await f.transport.flush(f.ids[0]);assert.equal(lookups,3);
+});
+test('unregistered or failed recipient lookup never sends and groups/LIDs bypass phone lookup',async t=>{
+ const f=await fixture(t),socket=await f.open();let lookups=0;
+ socket.onWhatsApp=async()=>{lookups++;return [];};await f.message('invalid-number');await f.transport.flush(f.ids[0]);assert.equal(socket.sends.length,0);assert.equal((await f.db.get("SELECT status FROM messages WHERE id='invalid-number'")).status,'unsent');
+ socket.onWhatsApp=async()=>{lookups++;throw Error('synthetic private failure');};await f.message('lookup-error');await f.transport.flush(f.ids[0]);assert.equal(socket.sends.length,0);assert.ok(!(await f.db.get("SELECT error FROM messages WHERE id='lookup-error'")).error.includes('synthetic private'));
+ await f.message('group',{recipient:'12000000000@g.us'});await f.message('lid',{recipient:'1234567890@lid'});await f.transport.flush(f.ids[0]);assert.equal(lookups,2);assert.deepEqual(socket.sends.map(s=>s.jid),['12000000000@g.us','1234567890@lid']);
+});
+test('owner blocked during canonical address lookup cannot send a queued message',async t=>{
+ const f=await fixture(t),socket=await f.open();let release,entered;const gate=new Promise(r=>release=r),started=new Promise(r=>entered=r);
+ socket.onWhatsApp=async()=>{entered();await gate;return [{exists:true,jid:'551188888888@s.whatsapp.net'}];};await f.message('lookup-race');const sending=f.transport.flush(f.ids[0]);await started;await f.db.run('UPDATE users SET active=0 WHERE id=$1',[f.user.id]);release();await sending;assert.equal(socket.sends.length,0);assert.equal((await f.db.get("SELECT status FROM messages WHERE id='lookup-race'")).status,'queue');
 });
